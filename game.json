@@ -1,0 +1,42 @@
+{
+  "start_money": 500,
+  "start_slots": 3,
+  "event_chance": 0.2,
+  "strains": {
+    "дыня":   {"name": "Кислая Дыня",       "seed_price": 50,  "min_level": 1, "grow_min": 30,  "water_every_min": 15, "yield_g": 20, "price_g": 8,  "xp": 10},
+    "лимон":  {"name": "Лимонный Туман",    "seed_price": 120, "min_level": 2, "grow_min": 60,  "water_every_min": 20, "yield_g": 35, "price_g": 9,  "xp": 18},
+    "гелато": {"name": "Фиолетовое Гелато", "seed_price": 300, "min_level": 4, "grow_min": 120, "water_every_min": 30, "yield_g": 60, "price_g": 11, "xp": 30}
+  },
+  "pots": {
+    "малый":   {"liters": 5,  "yield_mult": 1.0, "price": 0},
+    "средний": {"liters": 10, "yield_mult": 1.4, "price": 400},
+    "большой": {"liters": 20, "yield_mult": 2.0, "price": 1200}
+  },
+  "lights": {
+    "окно": {"name": "Подоконник",  "mult": 1.0, "price": 0},
+    "лампа": {"name": "Лампа дневного света", "mult": 1.3, "price": 500},
+    "led":  {"name": "LED 300W",    "mult": 1.7, "price": 1500},
+    "hps":  {"name": "HPS 600W",    "mult": 2.2, "price": 4000}
+  },
+  "ferts": {
+    "компост": {"name": "Компост",         "bonus": 0.15, "price": 80},
+    "минерал": {"name": "Минеральный mix", "bonus": 0.30, "price": 200},
+    "золото":  {"name": "Золотое удобрение", "bonus": 0.60, "price": 600}
+  },
+  "cans": {
+    "жестяная": {"name": "Жестяная лейка", "slots": 1, "price": 0},
+    "ведро":    {"name": "Ведро с ковшом", "slots": 2, "price": 300},
+    "шланг":    {"name": "Шланг с насадкой", "slots": 4, "price": 900}
+  },
+  "qualities": [
+    {"name": "Обычный",    "chance": 70, "mult": 1.0},
+    {"name": "Хороший",    "chance": 22, "mult": 1.25},
+    {"name": "Отличный",   "chance": 7,  "mult": 1.6},
+    {"name": "Легендарный","chance": 1,  "mult": 2.5}
+  ],
+  "events": [
+    {"w": 5, "text": "🐛 Вредители атаковали, но ты успел их прогнать.\n🎁 Нашёл: Золотое удобрение × 1", "item": "fert:золото", "qty": 1},
+    {"w": 5, "text": "👛 В земле нашёлся чей-то кошелёк.\n🎁 Внутри: 150 💰", "money": 150},
+    {"w": 3, "text": "🌧 Соседи делились семенами.\n🎁 Получено: семена Кислая Дыня × 2", "item": "seed:дыня", "qty": 2}
+  ]
+}
