@@ -10,5 +10,9 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: SUPPORT_CONTACT
+        sync: false
       - key: PYTHON_VERSION
         value: 3.12.7

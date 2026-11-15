@@ -1,42 +1,89 @@
 {
   "start_money": 500,
-  "start_slots": 3,
-  "event_chance": 0.2,
+  "stars_rate": 80,
+  "vip": {"yield_bonus": 0.10, "xp_bonus": 0.25, "sell_bonus": 0.05, "speed_bonus": 0.10, "daily_mult": 2},
+  "stars_products": {
+    "vip7":   {"title": "VIP на 7 дней",   "desc": "VIP-статус на 7 дней: бонусы к урожаю, XP, продаже, скорости роста и ежедневному бонусу.", "stars": 50,  "vip_days": 7},
+    "vip30":  {"title": "VIP на 30 дней",  "desc": "VIP-статус на 30 дней: бонусы к урожаю, XP, продаже, скорости роста и ежедневному бонусу.", "stars": 150, "vip_days": 30},
+    "vip90":  {"title": "VIP на 90 дней",  "desc": "VIP-статус на 90 дней: бонусы к урожаю, XP, продаже, скорости роста и ежедневному бонусу.", "stars": 400, "vip_days": 90},
+    "coins1": {"title": "2 000 монет",     "desc": "Игровая валюта для фермы: 2 000 монет.",  "stars": 25,  "money": 2000},
+    "coins2": {"title": "10 000 монет",    "desc": "Игровая валюта для фермы: 10 000 монет.", "stars": 100, "money": 10000},
+    "coins3": {"title": "50 000 монет",    "desc": "Игровая валюта для фермы: 50 000 монет.", "stars": 400, "money": 50000},
+    "gold5":  {"title": "Золотое удобрение ×5", "desc": "5 золотых удобрений (+60% к урожаю каждое).", "stars": 50, "item": "fert:золото", "qty": 5}
+  },
+  "treasure_chance": 0.07,
+  "treasure_gap": 4,
+  "farms": {
+    "подоконник": {"name": "Подоконник",      "emoji": "🪟", "min_level": 1,  "slots": 3,  "yield_mult": 1.0},
+    "балкон":     {"name": "Балкон",          "emoji": "🚪", "min_level": 2,  "slots": 4,  "yield_mult": 1.1},
+    "гроубокс":   {"name": "Гроубокс",        "emoji": "🧰", "min_level": 4,  "slots": 5,  "yield_mult": 1.25},
+    "подвал":     {"name": "Подвал",          "emoji": "🏚", "min_level": 5,  "slots": 6,  "yield_mult": 1.35},
+    "гараж":      {"name": "Гараж",           "emoji": "🚗", "min_level": 10, "slots": 8,  "yield_mult": 1.5},
+    "теплица":    {"name": "Теплица",         "emoji": "🏡", "min_level": 13, "slots": 10, "yield_mult": 1.7},
+    "ангар":      {"name": "Ангар",           "emoji": "🏭", "min_level": 17, "slots": 12, "yield_mult": 2.0},
+    "бункер":     {"name": "Секретный бункер","emoji": "🏗", "min_level": 25, "slots": 16, "yield_mult": 2.5}
+  },
   "strains": {
-    "дыня":   {"name": "Кислая Дыня",       "seed_price": 50,  "min_level": 1, "grow_min": 30,  "water_every_min": 15, "yield_g": 20, "price_g": 8,  "xp": 10},
-    "лимон":  {"name": "Лимонный Туман",    "seed_price": 120, "min_level": 2, "grow_min": 60,  "water_every_min": 20, "yield_g": 35, "price_g": 9,  "xp": 18},
-    "гелато": {"name": "Фиолетовое Гелато", "seed_price": 300, "min_level": 4, "grow_min": 120, "water_every_min": 30, "yield_g": 60, "price_g": 11, "xp": 30}
+    "дыня":   {"name": "Кислая Дыня",       "seed_price": 50,   "grow_min": 30,  "water_every_min": 15, "yield_g": 20,  "price_g": 8,  "xp": 10,  "farms": ["подоконник", "балкон", "гроубокс"]},
+    "лимон":  {"name": "Лимонный Туман",    "seed_price": 120,  "grow_min": 60,  "water_every_min": 20, "yield_g": 35,  "price_g": 9,  "xp": 18,  "farms": ["балкон", "гроубокс", "подвал"]},
+    "гелато": {"name": "Фиолетовое Гелато", "seed_price": 300,  "grow_min": 120, "water_every_min": 30, "yield_g": 60,  "price_g": 11, "xp": 30,  "farms": ["гроубокс", "подвал", "гараж"]},
+    "дизель": {"name": "Дымный Дизель",     "seed_price": 700,  "grow_min": 180, "water_every_min": 40, "yield_g": 100, "price_g": 12, "xp": 50,  "farms": ["подвал", "гараж", "теплица"]},
+    "радуга": {"name": "Радужный Микс",     "seed_price": 1600, "grow_min": 300, "water_every_min": 60, "yield_g": 180, "price_g": 14, "xp": 90,  "farms": ["гараж", "теплица", "ангар"]},
+    "ледник": {"name": "Ледяной Король",    "seed_price": 4000, "grow_min": 480, "water_every_min": 90, "yield_g": 350, "price_g": 16, "xp": 160, "farms": ["теплица", "ангар", "бункер"]}
   },
   "pots": {
     "малый":   {"liters": 5,  "yield_mult": 1.0, "price": 0},
     "средний": {"liters": 10, "yield_mult": 1.4, "price": 400},
-    "большой": {"liters": 20, "yield_mult": 2.0, "price": 1200}
+    "большой": {"liters": 20, "yield_mult": 2.0, "price": 1200},
+    "кадка":   {"liters": 40, "yield_mult": 3.0, "price": 4000}
   },
   "lights": {
-    "окно": {"name": "Подоконник",  "mult": 1.0, "price": 0},
-    "лампа": {"name": "Лампа дневного света", "mult": 1.3, "price": 500},
-    "led":  {"name": "LED 300W",    "mult": 1.7, "price": 1500},
-    "hps":  {"name": "HPS 600W",    "mult": 2.2, "price": 4000}
+    "окно":  {"name": "Подоконник",           "mult": 1.0, "price": 0,     "min_level": 1},
+    "лампа": {"name": "Лампа дневного света", "mult": 1.3, "price": 500,   "min_level": 1},
+    "led":   {"name": "LED 300W",             "mult": 1.7, "price": 1500,  "min_level": 5},
+    "hps":   {"name": "HPS 600W",             "mult": 2.2, "price": 4000,  "min_level": 13},
+    "плазма":{"name": "Плазменная панель",    "mult": 3.0, "price": 15000, "min_level": 30}
+  },
+  "accs": {
+    "вентилятор": {"name": "Вентилятор",        "price": 400,  "durability": 15, "bonus": 0.10, "min_level": 1},
+    "фильтр":     {"name": "Угольный фильтр",   "price": 1200, "durability": 25, "bonus": 0.20, "min_level": 5},
+    "климат":     {"name": "Климат-контроль",   "price": 4000, "durability": 40, "bonus": 0.35, "min_level": 10}
   },
   "ferts": {
-    "компост": {"name": "Компост",         "bonus": 0.15, "price": 80},
-    "минерал": {"name": "Минеральный mix", "bonus": 0.30, "price": 200},
+    "компост": {"name": "Компост",           "bonus": 0.15, "price": 80},
+    "минерал": {"name": "Минеральный mix",   "bonus": 0.30, "price": 200},
     "золото":  {"name": "Золотое удобрение", "bonus": 0.60, "price": 600}
   },
   "cans": {
-    "жестяная": {"name": "Жестяная лейка", "slots": 1, "price": 0},
-    "ведро":    {"name": "Ведро с ковшом", "slots": 2, "price": 300},
-    "шланг":    {"name": "Шланг с насадкой", "slots": 4, "price": 900}
+    "жестяная": {"name": "Жестяная лейка",    "slots": 1, "price": 0},
+    "ведро":    {"name": "Ведро с ковшом",    "slots": 2, "price": 300},
+    "шланг":    {"name": "Шланг с насадкой",  "slots": 4, "price": 900},
+    "капельный":{"name": "Капельный полив",   "slots": 8, "price": 3500}
   },
   "qualities": [
-    {"name": "Обычный",    "chance": 70, "mult": 1.0},
-    {"name": "Хороший",    "chance": 22, "mult": 1.25},
-    {"name": "Отличный",   "chance": 7,  "mult": 1.6},
-    {"name": "Легендарный","chance": 1,  "mult": 2.5}
+    {"name": "Обычный",     "chance": 70, "mult": 1.0},
+    {"name": "Хороший",     "chance": 22, "mult": 1.25},
+    {"name": "Отличный",    "chance": 7,  "mult": 1.6},
+    {"name": "Легендарный", "chance": 1,  "mult": 2.5}
   ],
-  "events": [
-    {"w": 5, "text": "🐛 Вредители атаковали, но ты успел их прогнать.\n🎁 Нашёл: Золотое удобрение × 1", "item": "fert:золото", "qty": 1},
-    {"w": 5, "text": "👛 В земле нашёлся чей-то кошелёк.\n🎁 Внутри: 150 💰", "money": 150},
-    {"w": 3, "text": "🌧 Соседи делились семенами.\n🎁 Получено: семена Кислая Дыня × 2", "item": "seed:дыня", "qty": 2}
+  "treasures": [
+    {"w": 5, "item": "fert:золото",   "qty": 1},
+    {"w": 6, "money": [150, 400]},
+    {"w": 4, "item": "seed:дыня",     "qty": 2},
+    {"w": 2, "item": "acc:вентилятор","qty": 1}
+  ],
+  "missions": [
+    [
+      {"kind": "harvest",    "goal": 2,    "reward": 150, "text": "Собери растения: {goal}"},
+      {"kind": "water",      "goal": 5,    "reward": 120, "text": "Полей растения {goal} раз"}
+    ],
+    [
+      {"kind": "harvest",    "goal": 4,    "reward": 400, "text": "Собери растения: {goal}"},
+      {"kind": "sell_value", "goal": 1000, "reward": 450, "text": "Продай урожай на {goal} 💰"}
+    ],
+    [
+      {"kind": "grams",      "goal": 300,  "reward": 900,  "text": "Собери {goal} г урожая"},
+      {"kind": "rare",       "goal": 1,    "reward": 1000, "text": "Собери растение отличного или легендарного качества"}
+    ]
   ]
 }

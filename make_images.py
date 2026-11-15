@@ -14,9 +14,12 @@ FONT_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FONT_R = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 STRAINS = {
-    "дыня":   dict(name="Кислая Дыня",       sub="Уровень 1 · быстрый",  bg=("#1b3a2a", "#4b8f4a"), leaf=("#7fd957", "#3f9a3a"), bud=None),
-    "лимон":  dict(name="Лимонный Туман",    sub="Уровень 2 · средний",  bg=("#2d3a14", "#a3b832"), leaf=("#c8e04a", "#6f9a1f"), bud="#f4e04d"),
-    "гелато": dict(name="Фиолетовое Гелато", sub="Уровень 4 · редкий",   bg=("#241339", "#6a3fa0"), leaf=("#8a5bd0", "#3f8f4a"), bud="#d98cff"),
+    "дыня":   dict(name="Кислая Дыня",       sub="Подоконник · Балкон · Гроубокс",  bg=("#1b3a2a", "#4b8f4a"), leaf=("#7fd957", "#3f9a3a"), bud=None),
+    "лимон":  dict(name="Лимонный Туман",    sub="Балкон · Гроубокс · Подвал",     bg=("#2d3a14", "#a3b832"), leaf=("#c8e04a", "#6f9a1f"), bud="#f4e04d"),
+    "гелато": dict(name="Фиолетовое Гелато", sub="Гроубокс · Подвал · Гараж",      bg=("#241339", "#6a3fa0"), leaf=("#8a5bd0", "#3f8f4a"), bud="#d98cff"),
+    "дизель": dict(name="Дымный Дизель",     sub="Подвал · Гараж · Теплица",       bg=("#222428", "#5d6670"), leaf=("#9fb39a", "#3f6b4a"), bud="#e7e0c8"),
+    "радуга": dict(name="Радужный Микс",     sub="Гараж · Теплица · Ангар",        bg=("#3a1636", "#d0592f"), leaf=("#ff8a4d", "#3fae6a"), bud="#ffd24d"),
+    "ледник": dict(name="Ледяной Король",    sub="Теплица · Ангар · Бункер",       bg=("#0f2a44", "#4fb4d8"), leaf=("#bfe9ff", "#3a86b0"), bud="#ffffff"),
 }
 
 
