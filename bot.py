@@ -245,26 +245,13 @@ async def bump(conn, p, kind: str, amount: float):
 # ---------- команды ----------
 async def cmd_help(conn, p, a):
     return [(
-        "🌿 ГРОУФЕРМА\n\n"
-        "Меню — кнопочное меню (всё то же кнопками)\n"
-        "Ферма — текущая ферма и растения\n"
-        "Фермы — список ферм (открываются по уровню)\n"
-        "Ферма <название> — переехать на другую ферму\n"
-        "Посадить <сорт> [слот]\n"
-        "Полить [слот]\n"
-        "Удобрить <удобрение> [слот]\n"
-        "Собрать [слот]\n"
-        "Убрать <слот> — убрать засохшее\n"
-        "Склад — всё в наличии\n"
-        "Магазин / Купить <название> [кол-во]\n"
-        "Горшок <слот> <название> — сменить горшок\n"
-        "Продать [сорт]\n"
-        "Миссии / Забрать — ежедневные задания\n"
-        "Журнал — твои рекорды\n"
-        "Бонус — ежедневная награда\n"
-        "VIP — бонусы и статус\n"
-        "Звёзды — донат за ⭐, Купить <название> звёзды\n"
-        "Профиль", None)]
+        "🌿 ГРОУФЕРМА — как играть\n\n"
+        "Вся игра работает кнопками. Напиши в чат:\n"
+        "• Ферма — твоя ферма: полив, сбор, посадка, удобрения, горшки\n"
+        "• Магазин — товары по разделам\n"
+        "• Меню — главное меню (склад, миссии, профиль, VIP и т.д.)\n\n"
+        "Растения нужно поливать вовремя: если не поливать дольше двух интервалов, они засохнут. "
+        "Чем выше уровень, тем больше ферм открывается.", None)]
 
 
 async def cmd_profile(conn, p, a):
@@ -313,9 +300,9 @@ async def cmd_farm(conn, p, a):
             continue
         st = CFG["strains"][pl["strain"]]
         if s == "dead":
-            L.append(f"💀 {head}: {st['name']} засох. «Убрать {pl['slot']}»")
+            L.append(f"💀 {head}: {st['name']} засох")
         elif s == "ready":
-            L.append(f"✅ {head}: {st['name']} готов! «Собрать»")
+            L.append(f"✅ {head}: {st['name']} готов!")
         else:
             water_in = pl["last_water"] + st["water_every_min"] * 60 - t
             w = "💧 пора поливать!" if water_in <= 0 else f"💧 через {fmt_t(water_in)}"
@@ -327,7 +314,7 @@ async def cmd_farm(conn, p, a):
 async def cmd_plant(conn, p, a):
     keys = [x for x in a if x in CFG["strains"]]
     if not keys:
-        return [("Напиши: Посадить <сорт> [слот]. Сорта смотри в «Магазин».", None)]
+        return [("Выбери семена кнопкой в меню фермы.", None)]
     key = keys[0]
     st = CFG["strains"][key]
     if p["farm"] not in st["farms"]:
@@ -341,13 +328,13 @@ async def cmd_plant(conn, p, a):
         if not pl:
             return [("Такого слота нет.", None)]
         if pl["strain"]:
-            return [("Слот занят. Если там мёртвое растение — «Убрать N».", None)]
+            return [("Слот занят. Засохшее растение убирается кнопкой «Убрать засохшие» в меню фермы.", None)]
     else:
         pl = next((x for x in plots if not x["strain"]), None)
         if not pl:
             return [("Свободных слотов нет.", None)]
     if not await take_item(conn, p["user_id"], f"seed:{key}", 1):
-        return [(f"Нет семян {st['name']}. Купи: Купить {key}", None)]
+        return [(f"Нет семян {st['name']}. Купи в магазине, раздел «Семена».", None)]
     t = now()
     speed = CFG["lights"][p["light"]]["mult"] * (1 + VIP["speed_bonus"] if is_vip(p) else 1)
     ready = t + st["grow_min"] * 60 / speed
@@ -380,7 +367,7 @@ async def cmd_water(conn, p, a):
 async def cmd_fert(conn, p, a):
     keys = [x for x in a if x in CFG["ferts"]]
     if not keys:
-        return [("Напиши: Удобрить <удобрение> [слот]", None)]
+        return [("Выбери удобрение кнопкой в меню фермы.", None)]
     key = keys[0]
     slot = slot_arg(a)
     plots = await get_plots(conn, p)
@@ -389,7 +376,7 @@ async def cmd_fert(conn, p, a):
     if not cand:
         return [("Нет подходящего растения (нужно растущее и без удобрения).", None)]
     if not await take_item(conn, p["user_id"], f"fert:{key}", 1):
-        return [(f"У тебя нет «{CFG['ferts'][key]['name']}». Купи: Купить {key}", None)]
+        return [(f"У тебя нет «{CFG['ferts'][key]['name']}». Купи в магазине, раздел «Удобрения».", None)]
     await conn.execute("update plots set fert=$4 where user_id=$1 and farm=$2 and slot=$3",
                        p["user_id"], p["farm"], cand[0]["slot"], key)
     return [(f"🧪 Слот {cand[0]['slot']} удобрен: {CFG['ferts'][key]['name']} "
@@ -500,7 +487,6 @@ async def cmd_harvest(conn, p, a):
                     if old < v["min_level"] <= new]
         extra = f"\nОткрыта ферма: {', '.join(unlocked)}" if unlocked else ""
         out.append((f"🎉 Новый уровень: {new}!{extra}", None))
-    out.append(("Напиши Склад, чтобы посмотреть весь урожай.", None)) if len(out) > 1 else None
     return out
 
 
@@ -547,7 +533,7 @@ async def cmd_missions(conn, p, a):
         if r["claimed"]:
             st = "✅ получено"
         elif r["progress"] >= r["goal"]:
-            st = "🎁 готово — «Забрать»"
+            st = "🎁 готово, жми «Забрать награды»"
         else:
             st = f"{fmt_n(r['progress'])}/{r['goal']}"
         L.append(f"{tag}: {r['text']}\n    {st} · награда {r['reward']} 💰")
@@ -559,7 +545,7 @@ async def cmd_claim(conn, p, a):
     rows = await ensure_missions(conn, p)
     ready = [r for r in rows if r["progress"] >= r["goal"] and not r["claimed"]]
     if not ready:
-        return [("Готовых наград нет. «Миссии» покажет прогресс.", None)]
+        return [("Готовых наград пока нет.", None)]
     total = sum(r["reward"] for r in ready)
     for r in ready:
         await conn.execute(
@@ -610,7 +596,7 @@ async def deliver_item(conn, uid, it) -> str:
         await conn.execute("update players set can=$2 where user_id=$1", uid, key)
     elif kind == "pot":
         await add_item(conn, uid, f"pot:{key}", 1)
-        return "\n📦 Горшок на складе. Установить: Горшок <слот> " + key
+        return "\n📦 Горшок на складе. Установить: Ферма → 🪴 Горшки."
     elif kind == "acc":
         cur = await conn.fetchval("select acc from players where user_id=$1", uid)
         if cur is None:
@@ -637,7 +623,7 @@ def build_invoice(p, spec: str):
         if parts[0] == "buy":
             it = resolve_item(parts[1], int(parts[2]))
             if not it:
-                return "Такого товара нет. Смотри «Магазин»."
+                return "Такого товара нет. Загляни в магазин."
             if level_of(p["xp"]) < it["need"]:
                 return f"🔒 {it['label']} доступно с {it['need']} уровня."
             title, desc, stars = it["label"], f"Покупка в игре: {it['label']}", it["stars"]
@@ -654,53 +640,22 @@ def build_invoice(p, spec: str):
             "payload": f"{p['user_id']}|{spec}", "spec": spec}
 
 
-async def cmd_shop(conn, p, a):
-    def st(unit, item):
-        return f" · ⭐{unit_stars(unit, item)}"
-    L = ["🛒 МАГАЗИН  (Купить <название> [кол-во])",
-         "За ⭐: Купить <название> звёзды", "", "🌱 Семена:"]
-    for k, s_ in CFG["strains"].items():
-        where = "".join(CFG["farms"][f]["emoji"] for f in s_["farms"])
-        L.append(f"• {k} — {s_['name']}: {s_['seed_price']} 💰{st(s_['seed_price'], s_)} | {s_['grow_min']} мин | где: {where}")
-    L += ["", "🧪 Удобрения:"]
-    for k, s_ in CFG["ferts"].items():
-        L.append(f"• {k}: {s_['price']} 💰{st(s_['price'], s_)} | +{int(s_['bonus'] * 100)}% урожая")
-    L += ["", "💡 Свет (ускоряет рост):"]
-    for k, s_ in CFG["lights"].items():
-        if s_["price"]:
-            L.append(f"• {k} — {s_['name']}: {s_['price']} 💰{st(s_['price'], s_)} | ×{s_['mult']} | Lv.{s_['min_level']}")
-    L += ["", "🔧 Аксессуары (изнашиваются при сборе):"]
-    for k, s_ in CFG["accs"].items():
-        L.append(f"• {k} — {s_['name']}: {s_['price']} 💰{st(s_['price'], s_)} | +{int(s_['bonus'] * 100)}% урожая | "
-                 f"прочность {s_['durability']} | Lv.{s_['min_level']}")
-    L += ["", "🚿 Полив:"]
-    for k, s_ in CFG["cans"].items():
-        if s_["price"]:
-            L.append(f"• {k} — {s_['name']}: {s_['price']} 💰{st(s_['price'], s_)} | {s_['slots']} слотов за раз")
-    L += ["", "🪴 Горшки (Горшок <слот> <название>, слот должен быть пуст):"]
-    for k, s_ in CFG["pots"].items():
-        if s_["price"]:
-            L.append(f"• {k}: {s_['price']} 💰{st(s_['price'], s_)} | {s_['liters']} л | урожай ×{s_['yield_mult']}")
-    return [("\n".join(L), None)]
-
-
 async def cmd_buy(conn, p, a):
     if not a:
-        return [("Напиши: Купить <название> [кол-во] [звёзды]", None)]
+        return [("Выбери товар в магазине.", None)]
     key, rest = a[0], a[1:]
     stars_mode = any(x in STAR_WORDS for x in rest)
     qty = next((int(x) for x in rest if x.isdigit()), 1)
     it = resolve_item(key, qty)
     if not it:
-        return [("Такого товара нет. Смотри «Магазин».", None)]
+        return [("Такого товара нет. Загляни в магазин.", None)]
     if level_of(p["xp"]) < it["need"]:
         return [(f"🔒 {it['label']} доступно с {it['need']} уровня.", None)]
     if stars_mode:
         inv = build_invoice(p, f"buy|{key}|{it['qty']}")
         return [inv] if isinstance(inv, dict) else [(inv, None)]
     if p["money"] < it["price"]:
-        return [(f"Не хватает денег: нужно {it['price']}, у тебя {p['money']}.\n"
-                 f"Можно за ⭐: Купить {key} звёзды", None)]
+        return [(f"Не хватает денег: нужно {it['price']}, у тебя {p['money']}.\nМожно оплатить ⭐ Stars.", None)]
     await conn.execute("update players set money=money-$2 where user_id=$1",
                        p["user_id"], it["price"])
     note = await deliver_item(conn, p["user_id"], it)
@@ -711,7 +666,7 @@ async def cmd_pot(conn, p, a):
     slot = slot_arg(a)
     keys = [x for x in a if x in CFG["pots"]]
     if not slot or not keys:
-        return [("Напиши: Горшок <слот> <название>", None)]
+        return [("Выбери слот и горшок кнопками в меню фермы.", None)]
     key = keys[0]
     plots = await get_plots(conn, p)
     pl = next((x for x in plots if x["slot"] == slot), None)
@@ -725,7 +680,7 @@ async def cmd_pot(conn, p, a):
     else:
         price = CFG["pots"][key]["price"]
         if p["money"] < price:
-            return [(f"Не хватает денег: нужно {price}. Можно за ⭐: Купить {key} звёзды", None)]
+            return [(f"Не хватает денег: нужно {price} 💰. Горшок можно купить в магазине за ⭐.", None)]
         await conn.execute("update players set money=money-$2 where user_id=$1", p["user_id"], price)
     await conn.execute("update plots set pot=$4 where user_id=$1 and farm=$2 and slot=$3",
                        p["user_id"], p["farm"], slot, key)
@@ -746,7 +701,7 @@ async def cmd_vip(conn, p, a):
     for k, pr in CFG["stars_products"].items():
         if "vip_days" in pr:
             L.append(f"• {k} — {pr['title']}: ⭐{pr['stars']}")
-    L.append("\nКоманда: Звёзды <код>, например: Звёзды vip30. Повторная покупка продлевает срок.")
+    L.append("\nВыбери срок кнопкой ниже. Повторная покупка продлевает срок.")
     return [("\n".join(L), None)]
 
 
@@ -757,9 +712,7 @@ async def cmd_stars(conn, p, a):
     L = ["⭐ ЗВЁЗДЫ — VIP и донат", ""]
     for k, pr in CFG["stars_products"].items():
         L.append(f"• {k} — {pr['title']}: ⭐{pr['stars']}")
-    L += ["", "Оплата: Звёзды <код>, например: Звёзды vip30",
-          "Любой товар из магазина за ⭐: Купить <название> звёзды",
-          "Счёт придёт в личку бота. Вопросы по платежам: /paysupport"]
+    L += ["", "Счёт придёт в личку бота. Вопросы по платежам: /paysupport"]
     return [("\n".join(L), None)]
 
 
@@ -818,15 +771,7 @@ async def cmd_sell(conn, p, a):
     return [("\n".join(L), None)]
 
 
-COMMANDS = {
-    "помощь": cmd_help, "профиль": cmd_profile, "ферма": cmd_farm, "фермы": cmd_farms,
-    "посадить": cmd_plant, "полить": cmd_water, "удобрить": cmd_fert,
-    "собрать": cmd_harvest, "убрать": cmd_clear, "склад": cmd_stock,
-    "магазин": cmd_shop, "купить": cmd_buy, "горшок": cmd_pot, "продать": cmd_sell,
-    "журнал": cmd_journal, "миссии": cmd_missions, "забрать": cmd_claim,
-    "бонус": cmd_bonus, "вип": cmd_vip, "донат": cmd_stars, "звёзды": cmd_stars,
-    "звезды": cmd_stars, "⭐": cmd_stars,
-}
+
 
 
 # ---------- Telegram ----------
@@ -865,14 +810,23 @@ async def send(m: Message, text: str, img: str | None, markup=None):
             logging.warning("отправка с премиум-эмодзи не удалась, шлю обычным текстом: %s", e)
 
 
+SCREENS = {
+    "меню": "home", "menu": "home", "помощь": "help",
+    "ферма": "farm", "фермы": "farmsm", "магазин": "shop", "склад": "stock",
+    "профиль": "profile", "миссии": "missions", "бонус": "bonus", "журнал": "journal",
+    "вип": "vip", "донат": "donat", "звёзды": "donat", "звезды": "donat", "⭐": "donat",
+}
+
+
 async def on_text(m: Message):
+    """Текстом открываются только экраны с кнопками. Все действия делаются кнопками."""
     if not m.from_user or m.from_user.is_bot or not m.text:
         return
     parts = m.text.strip().lower().split()
     if not parts:
         return
-    handler = COMMANDS.get(parts[0])
-    if not handler:
+    screen = SCREENS.get(parts[0])
+    if not screen:
         return
     n = flood_count(m.from_user.id)
     if n > 10:
@@ -884,12 +838,8 @@ async def on_text(m: Message):
             p = await get_player(conn, m)
             if p["banned"]:
                 return
-            out = await handler(conn, p, parts[1:])
-    for item in out:
-        if isinstance(item, dict):
-            await send_invoice(m, item)
-        else:
-            await send(m, item[0], item[1])
+            text, markup, invs, extras = await menu_screen(conn, p, screen, [])
+    await send(m, text, None, markup)
 
 
 async def send_invoice(m: Message, inv: dict, uid: int | None = None):
@@ -1055,8 +1005,9 @@ def kb_home(uid: int):
     rows = [
         [("🏡 Ферма", mcd(uid, "farm")), ("🛒 Магазин", mcd(uid, "shop"))],
         [("📦 Склад", mcd(uid, "stock")), ("🎯 Миссии", mcd(uid, "missions"))],
-        [("👤 Профиль", mcd(uid, "profile")), ("🎁 Бонус", mcd(uid, "bonus"))],
-        [("👑 VIP", mcd(uid, "vip")), ("⭐ Донат", mcd(uid, "donat"))],
+        [("👤 Профиль", mcd(uid, "profile")), ("📖 Журнал", mcd(uid, "journal"))],
+        [("🎁 Бонус", mcd(uid, "bonus")), ("👑 VIP", mcd(uid, "vip"))],
+        [("⭐ Донат", mcd(uid, "donat")), ("❓ Помощь", mcd(uid, "help"))],
     ]
     if is_admin(uid):
         rows.append([("🛠 Админ-панель", acd(uid, "home"))])
@@ -1067,12 +1018,16 @@ def kb_back(uid: int):
     return kb([[("🏠 Меню", mcd(uid, "home"))]])
 
 
-def kb_farm(uid: int):
-    return kb([
+def kb_farm(uid: int, has_dead: bool = False):
+    rows = [
         [("💧 Полить", mcd(uid, "water")), ("✂️ Собрать", mcd(uid, "harvest"))],
         [("🌱 Посадить", mcd(uid, "plantm")), ("🧪 Удобрить", mcd(uid, "fertm"))],
-        [("🏘 Фермы", mcd(uid, "farmsm")), ("🔄 Обновить", mcd(uid, "farm"))],
-        [("🏠 Меню", mcd(uid, "home"))]])
+        [("🪴 Горшки", mcd(uid, "potm")), ("🏘 Фермы", mcd(uid, "farmsm"))],
+    ]
+    if has_dead:
+        rows.append([("🧹 Убрать засохшие", mcd(uid, "clearall"))])
+    rows.append([("🔄 Обновить", mcd(uid, "farm")), ("🏠 Меню", mcd(uid, "home"))])
+    return kb(rows)
 
 
 def out_text(out) -> str:
@@ -1082,53 +1037,176 @@ def out_text(out) -> str:
     return ("\n\n".join(texts) or "Готово.")[:3900]
 
 
-async def cat_screen(conn, uid, cat, note=""):
+async def farm_screen(conn, p, note=""):
+    out = await cmd_farm(conn, p, [])
+    plots = await get_plots(conn, p)
+    dead = any(state(x) == "dead" for x in plots)
+    text = (note + "\n\n" if note else "") + out[0][0]
+    return text, kb_farm(p["user_id"], dead)
+
+
+async def plant_all(conn, p, key):
+    done, last = 0, ""
+    for _ in range(CFG["farms"][p["farm"]]["slots"]):
+        t = (await cmd_plant(conn, p, [key]))[0][0]
+        if t.startswith("🌱 Посажено"):
+            done += 1
+        else:
+            last = t
+            break
+    if done:
+        return f"🌱 Посажено: {CFG['strains'][key]['name']} × {done}"
+    return last
+
+
+async def fert_all(conn, p, key):
+    done = 0
+    for _ in range(CFG["farms"][p["farm"]]["slots"]):
+        t = (await cmd_fert(conn, p, [key]))[0][0]
+        if t.startswith("🧪"):
+            done += 1
+        else:
+            break
+    return (f"🧪 Удобрено растений: {done}" if done
+            else "Нет подходящих растений или закончились удобрения.")
+
+
+def item_lines(cat, s_):
+    if cat == "strains":
+        where = ", ".join(farm_label(f) for f in s_["farms"])
+        return [f"⏱ Растёт {s_['grow_min']} мин · полив каждые {s_['water_every_min']} мин",
+                f"⚖️ Урожай ~{s_['yield_g']} г · продажа {s_['price_g']} 💰/г",
+                f"📍 Растёт на: {where}"]
+    if cat == "ferts":
+        return [f"+{int(s_['bonus'] * 100)}% к урожаю растения"]
+    if cat == "lights":
+        return [f"Рост быстрее в ×{s_['mult']} · нужен Lv.{s_['min_level']}"]
+    if cat == "accs":
+        return [f"+{int(s_['bonus'] * 100)}% к урожаю · прочность {s_['durability']} сборов · Lv.{s_['min_level']}"]
+    if cat == "cans":
+        return [f"Поливает слотов за раз: {s_['slots']}"]
+    return [f"Объём {s_['liters']} л · урожай ×{s_['yield_mult']}"]
+
+
+async def cat_screen(conn, uid, cat):
     p = await conn.fetchrow("select * from players where user_id=$1", uid)
     lvl = level_of(p["xp"])
-    L = ([note, ""] if note else []) + [CAT_TITLES[cat], f"💰 Баланс: {p['money']}", ""]
     rows = []
     for key, s_ in CFG[cat].items():
         it = resolve_item(key)
         if not it:
             continue
         name = s_.get("name", f"Горшок «{key}»")
-        if cat == "strains":
-            where = "".join(CFG["farms"][f]["emoji"] for f in s_["farms"])
-            L.append(f"• {name} — {s_['grow_min']} мин · где: {where}")
-        elif cat == "ferts":
-            L.append(f"• {name} — +{int(s_['bonus'] * 100)}% урожая")
-        elif cat == "lights":
-            L.append(f"• {name} — рост ×{s_['mult']} · Lv.{s_['min_level']}")
-        elif cat == "accs":
-            L.append(f"• {name} — +{int(s_['bonus'] * 100)}% урожая · прочность {s_['durability']} · Lv.{s_['min_level']}")
-        elif cat == "cans":
-            L.append(f"• {name} — {s_['slots']} слотов за раз")
-        else:
-            L.append(f"• {name} — {s_['liters']} л · урожай ×{s_['yield_mult']}")
         lock = "🔒 " if lvl < it["need"] else ""
-        rows.append([(f"{lock}{name} · {it['price']}💰", mcd(uid, "buy", key, "m")),
-                     (f"⭐{it['stars']}", mcd(uid, "buy", key, "s"))])
-    if cat in ("strains", "ferts"):
-        L.append("\nНесколько штук: Купить <название> <кол-во>")
-    rows.append([("⬅ Магазин", mcd(uid, "shop")), ("🏠 Меню", mcd(uid, "home"))])
-    return "\n".join(L), kb(rows)
+        rows.append([(f"{lock}{name} · {it['price']}💰 · ⭐{it['stars']}", mcd(uid, "item", key))])
+    rows.append([("⬅ Разделы", mcd(uid, "shop")), ("🏠 Меню", mcd(uid, "home"))])
+    return f"{CAT_TITLES[cat]}\n💰 Баланс: {p['money']}\nВыбери товар:", kb(rows)
+
+
+async def item_screen(conn, uid, key, note=""):
+    cat = CAT_OF[key]
+    s_ = CFG[cat][key]
+    it = resolve_item(key)
+    p = await conn.fetchrow("select * from players where user_id=$1", uid)
+    name = s_.get("name", f"Горшок «{key}»")
+    unit_price = it["price"] // it["qty"]
+    unit_stars_ = it["stars"] // it["qty"]
+    L = ([note, ""] if note else []) + [f"{CAT_TITLES[cat]} · {name}", *item_lines(cat, s_), "",
+         f"Цена: {unit_price} 💰 или ⭐{unit_stars_}", f"💰 Твой баланс: {p['money']}"]
+    back = [("⬅ Раздел", mcd(uid, "cat", cat)), ("🏠 Меню", mcd(uid, "home"))]
+    if level_of(p["xp"]) < it["need"]:
+        L.append(f"\n🔒 Доступно с {it['need']} уровня")
+        return "\n".join(L), kb([back])
+    if it["kind"] in ("seed", "fert"):
+        rows = [[(f"💰 ×{q}", mcd(uid, "buy", key, "m", q)) for q in (1, 5, 10)],
+                [(f"⭐ ×{q}", mcd(uid, "buy", key, "s", q)) for q in (1, 5, 10)]]
+    else:
+        rows = [[("💰 Купить", mcd(uid, "buy", key, "m", 1)), ("⭐ Купить", mcd(uid, "buy", key, "s", 1))]]
+    return "\n".join(L), kb(rows + [back])
+
+
+async def stock_screen(conn, p, note=""):
+    uid = p["user_id"]
+    out = await cmd_stock(conn, p, [])
+    crops = await conn.fetch(
+        "select item, qty from inventory where user_id=$1 and item like 'crop:%' order by item", uid)
+    btns = [(f"💸 {CFG['strains'][r['item'].split(':', 1)[1]]['name']} {fmt_n(r['qty'])} г",
+             mcd(uid, "sell", r["item"].split(":", 1)[1])) for r in crops]
+    rows = chunk(btns)
+    if crops:
+        rows.append([("💸 Продать всё", mcd(uid, "sell", "all"))])
+    rows.append([("🏠 Меню", mcd(uid, "home"))])
+    return (note + "\n\n" if note else "") + out[0][0], kb(rows)
+
+
+async def missions_screen(conn, p, note=""):
+    uid = p["user_id"]
+    out = await cmd_missions(conn, p, [])
+    rows_db = await ensure_missions(conn, p)
+    rows = []
+    if any(r["progress"] >= r["goal"] and not r["claimed"] for r in rows_db):
+        rows.append([("🎁 Забрать награды", mcd(uid, "claim"))])
+    rows.append([("🏠 Меню", mcd(uid, "home"))])
+    return (note + "\n\n" if note else "") + out[0][0], kb(rows)
 
 
 async def menu_screen(conn, p, action, args):
+    """Возвращает (текст, клавиатура, счета Stars, доп. сообщения для чата)."""
     uid = p["user_id"]
     lvl = level_of(p["xp"])
-    invs = []
+    invs, extras = [], []
 
     async def run(h, a=()):
         out = await h(conn, p, list(a))
         invs.extend(x for x in out if isinstance(x, dict))
         return out_text(out)
 
+    def ret(text, markup):
+        return text, markup, invs, extras
+
     if action == "home":
-        return home_text(p), kb_home(uid), invs
-    if action in ("farm", "water", "harvest"):
-        h = {"farm": cmd_farm, "water": cmd_water, "harvest": cmd_harvest}[action]
-        return await run(h), kb_farm(uid), invs
+        return ret(home_text(p), kb_home(uid))
+    if action == "help":
+        return ret((await cmd_help(conn, p, []))[0][0], kb_back(uid))
+
+    # ----- ферма -----
+    if action == "farm":
+        return ret(*await farm_screen(conn, p))
+    if action == "water":
+        return ret(*await farm_screen(conn, p, await run(cmd_water)))
+    if action == "harvest":
+        out = await cmd_harvest(conn, p, [])
+        got = [x for x in out if x[0].startswith("🌿 Сбор урожая")]
+        if got:
+            for t, img in out:
+                extras.append((f"👤 {p['name']}\n{t}" if t.startswith("🌿") else t, img))
+            note = f"✂️ Собрано растений: {len(got)}"
+        else:
+            note = out_text(out)
+        return ret(*await farm_screen(conn, p, note))
+    if action == "clearall":
+        plots = await get_plots(conn, p)
+        n = 0
+        for pl in plots:
+            if state(pl) == "dead":
+                await cmd_clear(conn, p, [str(pl["slot"])])
+                n += 1
+        return ret(*await farm_screen(conn, p, f"🧹 Убрано засохших: {n}" if n else "Засохших растений нет."))
+    if action == "farmsm":
+        btns = [(f"{'🔒' if lvl < f['min_level'] else f['emoji']} {f['name']} · Lv.{f['min_level']}",
+                 mcd(uid, "farmgo", k)) for k, f in CFG["farms"].items()]
+        rows = chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]
+        return ret(f"🏘 Выбери ферму (сейчас: {farm_label(p['farm'])}):", kb(rows))
+    if action == "farmgo":
+        f = CFG["farms"][args[0]]
+        if lvl < f["min_level"]:
+            return ret(f"🔒 {f['name']} открывается с {f['min_level']} уровня.",
+                       kb([[("⬅ Фермы", mcd(uid, "farmsm"))]]))
+        await conn.execute("update players set farm=$2 where user_id=$1", uid, args[0])
+        p2 = await conn.fetchrow("select * from players where user_id=$1", uid)
+        return ret(*await farm_screen(conn, p2, f"📍 Ты на ферме: {farm_label(args[0])}"))
+
+    # ----- посадка -----
     if action == "plantm":
         rows_db = await conn.fetch(
             "select item, qty from inventory where user_id=$1 and item like 'seed:%' order by item", uid)
@@ -1137,69 +1215,132 @@ async def menu_screen(conn, p, action, args):
             key = r["item"].split(":", 1)[1]
             st = CFG["strains"][key]
             ok = p["farm"] in st["farms"]
-            btns.append((f"{'🌱' if ok else '🚫'} {st['name']} ×{fmt_n(r['qty'])}", mcd(uid, "plant", key)))
-        text = ("🌱 Что посадить? (🚫 — не растёт на этой ферме)" if btns
-                else "У тебя нет семян. Купи в магазине.")
-        rows = chunk(btns) + [[("🛒 Семена", mcd(uid, "cat", "strains")), ("⬅ Ферма", mcd(uid, "farm"))]]
-        return text, kb(rows), invs
-    if action == "plant":
-        return await run(cmd_plant, [args[0]]), kb_farm(uid), invs
+            btns.append((f"{'🌱' if ok else '🚫'} {st['name']} ×{fmt_n(r['qty'])}", mcd(uid, "plantk", key)))
+        if not btns:
+            return ret("🌱 ПОСАДКА\nУ тебя нет семян. Купи их в магазине.",
+                       kb([[("🛒 Купить семена", mcd(uid, "cat", "strains"))], [("⬅ Ферма", mcd(uid, "farm"))]]))
+        return ret(f"🌱 ПОСАДКА · {farm_label(p['farm'])}\nВыбери семена (🚫 — не растут на этой ферме):",
+                   kb(chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]))
+    if action == "plantk":
+        key = args[0]
+        st = CFG["strains"][key]
+        have = await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, f"seed:{key}")
+        back = [("⬅ Семена", mcd(uid, "plantm"))]
+        if not have:
+            return ret("Семян не осталось.", kb([back]))
+        if p["farm"] not in st["farms"]:
+            where = ", ".join(farm_label(f) for f in st["farms"])
+            return ret(f"🚫 {st['name']} не растёт на ферме «{CFG['farms'][p['farm']]['name']}».\nПодходит: {where}",
+                       kb([back]))
+        plots = await get_plots(conn, p)
+        free = [x for x in plots if not x["strain"]]
+        if not free:
+            return ret("Свободных слотов нет. Собери урожай или убери засохшее.", kb([back]))
+        speed = CFG["lights"][p["light"]]["mult"] * (1 + VIP["speed_bonus"] if is_vip(p) else 1)
+        btns = [(f"Слот {x['slot']} · {CFG['pots'][x['pot']]['liters']} л", mcd(uid, "plants", key, x["slot"]))
+                for x in free]
+        rows = chunk(btns, 3) + [[("🌱 Во все свободные", mcd(uid, "plants", key, "all"))], back]
+        return ret(f"🌱 {st['name']} · семян: {fmt_n(have)}\n⏱ Созреет за {fmt_t(st['grow_min'] * 60 / speed)}\n"
+                   f"💧 Полив каждые {st['water_every_min']} мин\nКуда сажаем?", kb(rows))
+    if action == "plants":
+        key, slot = args[0], args[1]
+        note = await plant_all(conn, p, key) if slot == "all" else await run(cmd_plant, [key, slot])
+        return ret(*await farm_screen(conn, p, note))
+
+    # ----- удобрения -----
     if action == "fertm":
         rows_db = await conn.fetch(
             "select item, qty from inventory where user_id=$1 and item like 'fert:%' order by item", uid)
         btns = [(f"🧪 {CFG['ferts'][r['item'].split(':', 1)[1]]['name']} ×{fmt_n(r['qty'])}",
-                 mcd(uid, "fert", r["item"].split(":", 1)[1])) for r in rows_db]
-        text = "🧪 Чем удобрить растущее растение?" if btns else "Удобрений нет. Купи в магазине."
-        rows = chunk(btns) + [[("🛒 Удобрения", mcd(uid, "cat", "ferts")), ("⬅ Ферма", mcd(uid, "farm"))]]
-        return text, kb(rows), invs
-    if action == "fert":
-        return await run(cmd_fert, [args[0]]), kb_farm(uid), invs
-    if action == "farmsm":
-        btns = [(f"{'🔒' if lvl < f['min_level'] else f['emoji']} {f['name']} (Lv.{f['min_level']})",
-                 mcd(uid, "farmgo", k)) for k, f in CFG["farms"].items()]
-        rows = chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]
-        return f"🏘 Выбери ферму (сейчас: {farm_label(p['farm'])}):", kb(rows), invs
-    if action == "farmgo":
-        return await run(cmd_farm, [args[0]]), kb_farm(uid), invs
+                 mcd(uid, "fertk", r["item"].split(":", 1)[1])) for r in rows_db]
+        if not btns:
+            return ret("🧪 УДОБРЕНИЯ\nУдобрений нет. Купи их в магазине.",
+                       kb([[("🛒 Купить удобрения", mcd(uid, "cat", "ferts"))], [("⬅ Ферма", mcd(uid, "farm"))]]))
+        return ret("🧪 УДОБРЕНИЯ\nВыбери удобрение:", kb(chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]))
+    if action == "fertk":
+        key = args[0]
+        plots = await get_plots(conn, p)
+        cand = [x for x in plots if state(x) == "grow" and not x["fert"]]
+        back = [("⬅ Удобрения", mcd(uid, "fertm"))]
+        if not cand:
+            return ret("Нет растущих растений без удобрения.", kb([back]))
+        btns = [(f"Слот {x['slot']} · {CFG['strains'][x['strain']]['name']}", mcd(uid, "ferts", key, x["slot"]))
+                for x in cand]
+        rows = chunk(btns) + [[("🧪 Всем подходящим", mcd(uid, "ferts", key, "all"))], back]
+        f = CFG["ferts"][key]
+        return ret(f"🧪 {f['name']} (+{int(f['bonus'] * 100)}% урожая)\nКакое растение удобряем?", kb(rows))
+    if action == "ferts":
+        key, slot = args[0], args[1]
+        note = await fert_all(conn, p, key) if slot == "all" else await run(cmd_fert, [key, slot])
+        return ret(*await farm_screen(conn, p, note))
+
+    # ----- горшки -----
+    if action == "potm":
+        plots = await get_plots(conn, p)
+        free = [x for x in plots if not x["strain"]]
+        if not free:
+            return ret("Горшок можно менять только в пустом слоте.", kb([[("⬅ Ферма", mcd(uid, "farm"))]]))
+        btns = [(f"Слот {x['slot']} · {x['pot']} ({CFG['pots'][x['pot']]['liters']} л)", mcd(uid, "potk", x["slot"]))
+                for x in free]
+        return ret("🪴 ГОРШКИ\nВ каком слоте меняем горшок?", kb(chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]))
+    if action == "potk":
+        slot = args[0]
+        inv = {r["item"]: r["qty"] for r in await conn.fetch(
+            "select item, qty from inventory where user_id=$1 and item like 'pot:%'", uid)}
+        btns = []
+        for k, pt in CFG["pots"].items():
+            have = inv.get(f"pot:{k}")
+            price = "со склада" if have else ("бесплатно" if not pt["price"] else f"{pt['price']}💰")
+            btns.append((f"{k} · {pt['liters']} л · ×{pt['yield_mult']} · {price}", mcd(uid, "potset", slot, k)))
+        rows = [[b] for b in btns] + [[("⬅ Горшки", mcd(uid, "potm"))]]
+        return ret(f"🪴 Слот {slot}: выбери горшок.\n💰 Баланс: {p['money']}\n"
+                   "Купить горшок за ⭐ можно в магазине (раздел «Горшки»).", kb(rows))
+    if action == "potset":
+        return ret(*await farm_screen(conn, p, await run(cmd_pot, [args[0], args[1]])))
+
+    # ----- магазин -----
     if action == "shop":
         btns = [(t, mcd(uid, "cat", c)) for c, t in CAT_TITLES.items()]
-        rows = chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]
-        return f"🛒 МАГАЗИН\n💰 Баланс: {p['money']}\nВыбери раздел:", kb(rows), invs
+        return ret(f"🛒 МАГАЗИН\n💰 Баланс: {p['money']}\nВыбери раздел:",
+                   kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]))
     if action == "cat":
-        text, markup = await cat_screen(conn, uid, args[0])
-        return text, markup, invs
+        return ret(*await cat_screen(conn, uid, args[0]))
+    if action == "item":
+        return ret(*await item_screen(conn, uid, args[0]))
     if action == "buy":
-        note = await run(cmd_buy, [args[0]] + (["звёзды"] if args[1] == "s" else []))
-        text, markup = await cat_screen(conn, uid, CAT_OF[args[0]], note)
-        return text, markup, invs
+        key, mode, qty = args[0], args[1], args[2]
+        note = await run(cmd_buy, [key, qty] + (["звёзды"] if mode == "s" else []))
+        return ret(*await item_screen(conn, uid, key, note))
+
+    # ----- остальное -----
     if action == "stock":
-        return await run(cmd_stock), kb([[("💸 Продать всё", mcd(uid, "sell"))], [("🏠 Меню", mcd(uid, "home"))]]), invs
+        return ret(*await stock_screen(conn, p))
     if action == "sell":
-        return await run(cmd_sell), kb_back(uid), invs
-    if action in ("missions", "claim"):
-        h = cmd_missions if action == "missions" else cmd_claim
-        text = await run(h)
-        if action == "claim":
-            text += "\n\n" + await run(cmd_missions)
-        return text, kb([[("🎁 Забрать награды", mcd(uid, "claim"))], [("🏠 Меню", mcd(uid, "home"))]]), invs
+        note = await run(cmd_sell, [] if args[0] == "all" else [args[0]])
+        return ret(*await stock_screen(conn, p, note))
+    if action == "missions":
+        return ret(*await missions_screen(conn, p))
+    if action == "claim":
+        return ret(*await missions_screen(conn, p, await run(cmd_claim)))
     if action == "profile":
-        return await run(cmd_profile), kb_back(uid), invs
+        return ret(await run(cmd_profile), kb_back(uid))
+    if action == "journal":
+        return ret(await run(cmd_journal), kb_back(uid))
     if action == "bonus":
-        return await run(cmd_bonus), kb_back(uid), invs
+        return ret(await run(cmd_bonus), kb_back(uid))
     if action == "vip":
         text = await run(cmd_vip)
-        btns = [(f"⭐ {pr['title']} — {pr['stars']}", mcd(uid, "prod", k))
+        rows = [[(f"⭐ {pr['title']} — {pr['stars']}", mcd(uid, "prod", k))]
                 for k, pr in CFG["stars_products"].items() if "vip_days" in pr]
-        return text, kb(btns and [[b] for b in btns] + [[("🏠 Меню", mcd(uid, "home"))]]), invs
+        return ret(text, kb(rows + [[("🏠 Меню", mcd(uid, "home"))]]))
     if action == "donat":
         btns = [(f"{pr['title']} — ⭐{pr['stars']}", mcd(uid, "prod", k))
                 for k, pr in CFG["stars_products"].items()]
-        rows = chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]
-        return ("⭐ ДОНАТ — выбери товар. Счёт придёт в личку бота.\nВопросы: /paysupport"), kb(rows), invs
+        return ret("⭐ ДОНАТ — выбери товар. Счёт придёт в личку бота.\nВопросы по платежам: /paysupport",
+                   kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]))
     if action == "prod":
-        text = await run(cmd_stars, [args[0]])
-        return text, kb_back(uid), invs
-    return home_text(p), kb_home(uid), invs
+        return ret(await run(cmd_stars, [args[0]]), kb_back(uid))
+    return ret(home_text(p), kb_home(uid))
 
 
 async def edit_menu(cb: CallbackQuery, text: str, markup):
@@ -1231,7 +1372,7 @@ async def on_menu_cb(cb: CallbackQuery):
     parts = cb.data.split("|")
     owner = int(parts[1])
     if cb.from_user.id != owner:
-        await cb.answer("Это меню другого игрока. Напиши «Меню», чтобы открыть своё.", show_alert=True)
+        await cb.answer("Это меню другого игрока. Напиши «Ферма» или «Меню», чтобы открыть своё.", show_alert=True)
         return
     if flood_count(owner) > 14:
         await cb.answer("Не так быстро!")
@@ -1242,9 +1383,11 @@ async def on_menu_cb(cb: CallbackQuery):
             if p["banned"]:
                 await cb.answer("Доступ закрыт.", show_alert=True)
                 return
-            text, markup, invs = await menu_screen(conn, p, parts[2], parts[3:])
+            text, markup, invs, extras = await menu_screen(conn, p, parts[2], parts[3:])
     await cb.answer()
     await edit_menu(cb, text, markup)
+    for t, img in extras:
+        await send(cb.message, t, img)
     for inv in invs:
         await send_invoice(cb.message, inv, uid=owner)
 
