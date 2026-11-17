@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: growbot
+    name: kladbot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt

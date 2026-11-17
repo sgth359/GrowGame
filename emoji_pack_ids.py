@@ -47,5 +47,5 @@ base = Path(__file__).parent
 (base / "emoji_all.json").write_text(json.dumps(emoji_all, ensure_ascii=False, indent=1), encoding="utf-8")
 print(f"Готово: {len(emoji_map)} эмодзи в emoji_map.json")
 print("Эмодзи из игры, которых нет в наборах (останутся обычными):")
-used = "🌿🌱💰⭐💧🧪💡🚿🪴⏱⚖️🎯✨🎲🎁🏡✅💀🕳🧹📦🛒👤💸🎉🔒👛🐛🌧"
+used = "⛏🎯✨⚖️💰⭐🗺📡🔧🎁📍🎒🛒👤💸🎉🔒💎📖👑⏳🏺🚜⛽🛠📦⚙🛡"
 print(" ".join(c for c in used if c not in emoji_map and c + "\ufe0f" not in emoji_map))

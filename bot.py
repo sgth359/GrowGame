@@ -31,7 +31,28 @@ SUPPORT = os.environ.get("SUPPORT_CONTACT", "администратору игр
 
 BASE = Path(__file__).parent
 CFG = json.loads((BASE / "game.json").read_text(encoding="utf-8"))
-IMG_DIR = BASE / "images"                         # images/дыня.jpg ...
+IMG_DIR = BASE / "images"                         # images/пляж.jpg ... (картинка локации)
+VIP = CFG["vip"]
+RARITY = CFG["rarity"]
+
+# все находки: ключ = «локация + номер», напр. пляж3
+FINDS = {}
+for _lk, _loc in CFG["locations"].items():
+    for _i, _f in enumerate(_loc["finds"]):
+        FINDS[f"{_lk}{_i}"] = dict(_f, key=f"{_lk}{_i}", loc=_lk)
+
+# коллекционные находки: ключ = «локация + r + номер», напр. пляжr2
+RELICS = {}
+for _lk, _loc in CFG["locations"].items():
+    for _i, _r in enumerate(_loc.get("relics", [])):
+        RELICS[f"{_lk}r{_i}"] = dict(_r, key=f"{_lk}r{_i}", loc=_lk)
+COLL = CFG["collection"]
+CH = CFG["chests"]
+CHC = CFG["chest_cfg"]
+KEYS = CFG["keys"]
+EXPC = CFG["expedition"]
+ROUTES = CFG["routes"]
+MODS = CFG["modules"]
 
 # Премиум-эмодзи: emoji_map.json делает emoji_pack_ids.py ({"🌿": "id", ...})
 EMOJI_RE = None
@@ -56,44 +77,62 @@ def decorate(text: str) -> str:
 
 SCHEMA = """
 create table if not exists players(
-  user_id bigint primary key, name text,
-  money bigint not null default 500, xp bigint not null default 0,
-  light text not null default 'окно', can text not null default 'жестяная',
-  farm text not null default 'подоконник',
-  acc text, acc_dur int not null default 0,
-  since_treasure int not null default 99, harvests int not null default 0);
-create table if not exists plots(
-  user_id bigint, farm text, slot int, pot text not null default 'малый',
-  strain text, planted_at double precision, ready_at double precision,
-  last_water double precision, fert text,
-  primary key(user_id, farm, slot));
+  user_id bigint primary key, name text, username text,
+  money bigint not null default 300, xp bigint not null default 0,
+  loc text not null default 'пляж', tool text not null default 'ржавая',
+  det text, det_dur int not null default 0, bait text,
+  last_dig double precision not null default 0,
+  since_treasure int not null default 99, digs int not null default 0,
+  vip_until double precision not null default 0, last_bonus text,
+  banned boolean not null default false);
+alter table players add column if not exists username text;
+alter table players add column if not exists loc text not null default 'пляж';
+alter table players add column if not exists tool text not null default 'ржавая';
+alter table players add column if not exists det text;
+alter table players add column if not exists det_dur int not null default 0;
+alter table players add column if not exists bait text;
+alter table players add column if not exists last_dig double precision not null default 0;
+alter table players add column if not exists since_treasure int not null default 99;
+alter table players add column if not exists digs int not null default 0;
+alter table players add column if not exists vip_until double precision not null default 0;
+alter table players add column if not exists last_bonus text;
+alter table players add column if not exists banned boolean not null default false;
 create table if not exists inventory(
   user_id bigint, item text, qty double precision not null,
   primary key(user_id, item));
-create table if not exists journal(
-  user_id bigint, strain text, cnt int not null default 0,
-  best_g double precision not null default 0, best_q int not null default 0,
-  primary key(user_id, strain));
-create table if not exists missions(
+create table if not exists dig_journal(
+  user_id bigint, item text, cnt int not null default 0,
+  best_kg double precision not null default 0, best_r int not null default 0,
+  primary key(user_id, item));
+create table if not exists dig_missions(
   user_id bigint, day text, idx int, kind text, goal int,
   progress double precision not null default 0, reward int,
   claimed boolean not null default false, text text,
   primary key(user_id, day, idx));
-alter table players add column if not exists vip_until double precision not null default 0;
-alter table players add column if not exists last_bonus text;
-alter table players add column if not exists username text;
-alter table players add column if not exists banned boolean not null default false;
-create table if not exists admin_log(
-  id bigserial primary key, created double precision, admin_id bigint,
-  target bigint, action text);
 create table if not exists payments(
   charge_id text primary key, user_id bigint, payload text, stars int,
   created double precision, delivered boolean not null default false,
   refunded boolean not null default false);
+create table if not exists admin_log(
+  id bigserial primary key, created double precision, admin_id bigint,
+  target bigint, action text);
+alter table players add column if not exists vehicle text;
+alter table players add column if not exists stars bigint not null default 0;
+create table if not exists star_log(
+  id bigserial primary key, created double precision, user_id bigint, delta bigint, reason text);
+create table if not exists relic_journal(
+  user_id bigint, key text, cnt int not null default 0,
+  primary key(user_id, key));
+create table if not exists vehicles(
+  user_id bigint, key text, engine int not null default 0, radar int not null default 0,
+  cargo int not null default 0, hull int not null default 0,
+  primary key(user_id, key));
+create table if not exists expeditions(
+  user_id bigint primary key, vehicle text, route text, loc text,
+  started double precision, ready double precision);
 """
-RESET = ("drop table if exists missions, journal, inventory, plots, players cascade;")
+RESET = "drop table if exists star_log, expeditions, vehicles, relic_journal, dig_missions, dig_journal, inventory, players cascade;"
 
-VIP = CFG["vip"]
 pool: asyncpg.Pool
 LOCK = asyncio.Lock()
 now = time.time
@@ -120,26 +159,8 @@ def fmt_n(x: float) -> str:
     return f"{x:g}" if abs(x - round(x)) < 1e-9 else f"{x:.1f}"
 
 
-def slot_arg(args):
-    for a in args:
-        if a.isdigit():
-            return int(a)
-    return None
-
-
-def farm_label(key: str) -> str:
-    f = CFG["farms"][key]
-    return f"{f['emoji']} {f['name']}"
-
-
-def state(pl) -> str:
-    if not pl["strain"]:
-        return "empty"
-    st = CFG["strains"][pl["strain"]]
-    die_after = pl["last_water"] + st["water_every_min"] * 120
-    if min(now(), pl["ready_at"]) > die_after:
-        return "dead"
-    return "ready" if now() >= pl["ready_at"] else "grow"
+def today() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
 
 
 def is_vip(p) -> bool:
@@ -152,8 +173,33 @@ def vip_line(p) -> str:
     return "\n👑 VIP до " + time.strftime("%d.%m.%Y", time.gmtime(p["vip_until"]))
 
 
-def today() -> str:
-    return time.strftime("%Y-%m-%d", time.gmtime())
+def loc_label(key: str) -> str:
+    loc = CFG["locations"][key]
+    return f"{loc['emoji']} {loc['name']}"
+
+
+def find_name(key: str) -> str:
+    f = FINDS[key]
+    return f"{f['emoji']} {f['name']}"
+
+
+def item_name(item: str) -> str:
+    kind, key = item.split(":", 1)
+    if kind == "bait":
+        return f"Карта: {CFG['baits'][key]['name']}"
+    if kind == "det":
+        return f"Запасной детектор: {CFG['dets'][key]['name']}"
+    if kind == "find":
+        return find_name(key)
+    if kind == "fuel":
+        return f"⛽ {CFG['fuels'][key]['name']}"
+    if kind == "relic":
+        return f"{RELICS[key]['emoji']} {RELICS[key]['name']}"
+    if kind == "key":
+        return f"{KEYS[key]['emoji']} {KEYS[key]['name']}"
+    if kind == "chest":
+        return f"{CH[key]['emoji']} {CH[key]['name']}"
+    return item
 
 
 async def get_player(conn, m):
@@ -162,23 +208,14 @@ async def get_player(conn, m):
     p = await conn.fetchrow("select * from players where user_id=$1", uid)
     if not p:
         await conn.execute(
-            "insert into players(user_id,name,username,money) values($1,$2,$3,$4)",
-            uid, m.from_user.full_name, uname, CFG["start_money"])
-        await add_item(conn, uid, "seed:дыня", 2)
+            "insert into players(user_id,name,username,money,bait) values($1,$2,$3,$4,$5)",
+            uid, m.from_user.full_name, uname, CFG["start_money"], "карта1")
+        await add_item(conn, uid, "bait:карта1", 3)
         p = await conn.fetchrow("select * from players where user_id=$1", uid)
     elif p["username"] != uname or p["name"] != m.from_user.full_name:
         await conn.execute("update players set name=$2, username=$3 where user_id=$1",
                            uid, m.from_user.full_name, uname)
     return p
-
-
-async def get_plots(conn, p, farm=None):
-    farm = farm or p["farm"]
-    await conn.execute(
-        "insert into plots(user_id,farm,slot) select $1,$2,g from generate_series(1,$3) g "
-        "on conflict do nothing", p["user_id"], farm, CFG["farms"][farm]["slots"])
-    return await conn.fetch(
-        "select * from plots where user_id=$1 and farm=$2 order by slot", p["user_id"], farm)
 
 
 async def add_item(conn, uid, item, qty):
@@ -200,26 +237,11 @@ async def take_item(conn, uid, item, qty) -> bool:
     return True
 
 
-def item_name(item: str) -> str:
-    kind, key = item.split(":", 1)
-    if kind == "seed":
-        return f"Семена: {CFG['strains'][key]['name']}"
-    if kind == "fert":
-        return CFG["ferts"][key]["name"]
-    if kind == "crop":
-        return f"Урожай: {CFG['strains'][key]['name']} (г)"
-    if kind == "acc":
-        return f"Запасной аксессуар: {CFG['accs'][key]['name']}"
-    if kind == "pot":
-        return f"Горшок: {key} ({CFG['pots'][key]['liters']} л)"
-    return item
-
-
 # ---------- миссии ----------
 async def ensure_missions(conn, p):
     uid, day = p["user_id"], today()
     rows = await conn.fetch(
-        "select * from missions where user_id=$1 and day=$2 order by idx", uid, day)
+        "select * from dig_missions where user_id=$1 and day=$2 order by idx", uid, day)
     if rows:
         return rows
     lvl = level_of(p["xp"])
@@ -227,337 +249,185 @@ async def ensure_missions(conn, p):
         t = random.choice(pool_)
         reward = round(t["reward"] * (1 + 0.03 * lvl))
         await conn.execute(
-            "insert into missions(user_id,day,idx,kind,goal,reward,text) values($1,$2,$3,$4,$5,$6,$7) "
+            "insert into dig_missions(user_id,day,idx,kind,goal,reward,text) values($1,$2,$3,$4,$5,$6,$7) "
             "on conflict do nothing", uid, day, idx, t["kind"], t["goal"], reward,
             t["text"].format(goal=t["goal"]))
     return await conn.fetch(
-        "select * from missions where user_id=$1 and day=$2 order by idx", uid, day)
+        "select * from dig_missions where user_id=$1 and day=$2 order by idx", uid, day)
 
 
 async def bump(conn, p, kind: str, amount: float):
     await ensure_missions(conn, p)
     await conn.execute(
-        "update missions set progress=least(goal::double precision, progress+$4::double precision) "
+        "update dig_missions set progress=least(goal::double precision, progress+$4::double precision) "
         "where user_id=$1 and day=$2 and kind=$3 and not claimed",
         p["user_id"], today(), kind, float(amount))
 
 
-# ---------- команды ----------
-async def cmd_help(conn, p, a):
-    return [(
-        "🌿 ГРОУФЕРМА — как играть\n\n"
-        "Вся игра работает кнопками. Напиши в чат:\n"
-        "• Ферма — твоя ферма: полив, сбор, посадка, удобрения, горшки\n"
-        "• Магазин — товары по разделам\n"
-        "• Меню — главное меню (склад, миссии, профиль, VIP и т.д.)\n\n"
-        "Растения нужно поливать вовремя: если не поливать дольше двух интервалов, они засохнут. "
-        "Чем выше уровень, тем больше ферм открывается.", None)]
+# ---------- раскопки ----------
+def cooldown_sec(p) -> float:
+    cd = CFG["tools"][p["tool"]]["cooldown_min"] * 60
+    return cd * (1 - VIP["cooldown_cut"]) if is_vip(p) else cd
 
 
-async def cmd_profile(conn, p, a):
-    lvl = level_of(p["xp"])
-    acc = "нет"
-    if p["acc"]:
-        acc = f"{CFG['accs'][p['acc']]['name']} (прочность {p['acc_dur']}/{CFG['accs'][p['acc']]['durability']})"
-    return [(
-        f"👤 {p['name']}\n⭐ Уровень: {lvl} (XP {p['xp']}, до след.: {xp_left(p['xp'])})\n"
-        f"💰 Баланс: {p['money']}{vip_line(p)}\n"
-        f"📍 Ферма: {farm_label(p['farm'])}\n"
-        f"💡 Свет: {CFG['lights'][p['light']]['name']} (×{CFG['lights'][p['light']]['mult']})\n"
-        f"🚿 Полив: {CFG['cans'][p['can']]['name']} (слотов за раз: {CFG['cans'][p['can']]['slots']})\n"
-        f"🔧 Аксессуар: {acc}\n"
-        f"🌾 Всего собрано растений: {p['harvests']}", None)]
+def loadout_text(p, bait_left=None) -> str:
+    tool = CFG["tools"][p["tool"]]
+    L = [f"📍 Локация: {loc_label(p['loc'])}", f"⛏ Лопата: {tool['name']}"]
+    if p["det"]:
+        d = CFG["dets"][p["det"]]
+        L.append(f"📡 Детектор: {d['name']} ({p['det_dur']}/{d['durability']})")
+    if p["bait"]:
+        left = bait_left if bait_left is not None else None
+        L.append(f"🗺 Карта: {CFG['baits'][p['bait']]['name']}" + (f" (осталось {fmt_n(left)})" if left is not None else ""))
+    return "\n".join(L)
 
 
-async def cmd_farms(conn, p, a):
-    lvl = level_of(p["xp"])
-    L = ["🏘 ФЕРМЫ (Ферма <название>)", ""]
-    for k, f in CFG["farms"].items():
-        mark = "📍" if k == p["farm"] else ("🔓" if lvl >= f["min_level"] else "🔒")
-        L.append(f"{mark} {k} — {f['emoji']} {f['name']} · Lv.{f['min_level']} · "
-                 f"{f['slots']} слотов · урожай ×{f['yield_mult']}")
-    return [("\n".join(L), None)]
+async def do_dig(conn, p):
+    uid, t, vip = p["user_id"], now(), is_vip(p)
+    loc_key = p["loc"]
+    loc = CFG["locations"][loc_key]
+    wait = p["last_dig"] + cooldown_sec(p) - t
+    if wait > 0:
+        return [("⏳ Ты ещё не отдохнул после прошлой раскопки.\n"
+                 f"До следующего копания: {fmt_t(wait)}\n" + loadout_text(p), None)]
 
-
-async def cmd_farm(conn, p, a):
-    if a and a[0] in CFG["farms"]:
-        f = CFG["farms"][a[0]]
-        if level_of(p["xp"]) < f["min_level"]:
-            return [(f"🔒 {f['name']} открывается с {f['min_level']} уровня.", None)]
-        await conn.execute("update players set farm=$2 where user_id=$1", p["user_id"], a[0])
-        p = await conn.fetchrow("select * from players where user_id=$1", p["user_id"])
-    farm = CFG["farms"][p["farm"]]
-    plots = await get_plots(conn, p)
-    L = [f"🏡 {farm['emoji']} {farm['name']} · {'👑 ' if is_vip(p) else ''}{p['name']}",
-         f"💡 {CFG['lights'][p['light']]['name']} · урожай фермы ×{farm['yield_mult']}", ""]
-    t = now()
-    for pl in plots:
-        pot = CFG["pots"][pl["pot"]]
-        head = f"Слот {pl['slot']} ({pot['liters']} л)"
-        s = state(pl)
-        if s == "empty":
-            L.append(f"🕳 {head}: пусто")
-            continue
-        st = CFG["strains"][pl["strain"]]
-        if s == "dead":
-            L.append(f"💀 {head}: {st['name']} засох")
-        elif s == "ready":
-            L.append(f"✅ {head}: {st['name']} готов!")
+    # карта (расходник)
+    bait, bait_note = None, ""
+    if p["bait"]:
+        bkey = p["bait"]
+        if await take_item(conn, uid, f"bait:{bkey}", 1):
+            bait = CFG["baits"][bkey]
+            left = await conn.fetchval("select qty from inventory where user_id=$1 and item=$2",
+                                       uid, f"bait:{bkey}") or 0
+            bait_note = f"🗺 Использована карта: {bait['name']} (осталось {fmt_n(left)})\n"
+            if not left:
+                await conn.execute("update players set bait=null where user_id=$1", uid)
+                bait_note += "⚠️ Карты этого типа закончились.\n"
         else:
-            water_in = pl["last_water"] + st["water_every_min"] * 60 - t
-            w = "💧 пора поливать!" if water_in <= 0 else f"💧 через {fmt_t(water_in)}"
-            L.append(f"🌱 {head}: {st['name']}\n    ⏱ {fmt_t(pl['ready_at'] - t)} | {w}"
-                     + (f" | 🧪 {pl['fert']}" if pl["fert"] else ""))
-    return [("\n".join(L), None)]
+            await conn.execute("update players set bait=null where user_id=$1", uid)
 
+    # удача
+    det, dur = p["det"], p["det_dur"]
+    luck = CFG["tools"][p["tool"]]["luck"]
+    luck *= 1 + VIP["luck_bonus"] if vip else 1
+    luck *= 1 + CFG["dets"][det]["luck"] if det else 1
+    luck *= bait["luck"] if bait else 1
+    luck *= 1 + COLL["luck_per_set"] * await collector_sets(conn, uid)
 
-async def cmd_plant(conn, p, a):
-    keys = [x for x in a if x in CFG["strains"]]
-    if not keys:
-        return [("Выбери семена кнопкой в меню фермы.", None)]
-    key = keys[0]
-    st = CFG["strains"][key]
-    if p["farm"] not in st["farms"]:
-        where = ", ".join(farm_label(f) for f in st["farms"])
-        return [(f"🌱 {st['name']} не растёт на ферме «{CFG['farms'][p['farm']]['name']}».\n"
-                 f"Подходит: {where}", None)]
-    plots = await get_plots(conn, p)
-    slot = slot_arg(a)
-    if slot:
-        pl = next((x for x in plots if x["slot"] == slot), None)
-        if not pl:
-            return [("Такого слота нет.", None)]
-        if pl["strain"]:
-            return [("Слот занят. Засохшее растение убирается кнопкой «Убрать засохшие» в меню фермы.", None)]
-    else:
-        pl = next((x for x in plots if not x["strain"]), None)
-        if not pl:
-            return [("Свободных слотов нет.", None)]
-    if not await take_item(conn, p["user_id"], f"seed:{key}", 1):
-        return [(f"Нет семян {st['name']}. Купи в магазине, раздел «Семена».", None)]
-    t = now()
-    speed = CFG["lights"][p["light"]]["mult"] * (1 + VIP["speed_bonus"] if is_vip(p) else 1)
-    ready = t + st["grow_min"] * 60 / speed
+    finds = loc["finds"]
+    weights = [f["w"] * (luck if f["r"] >= 2 else 1.0) for f in finds]
+    i = random.choices(range(len(finds)), weights=weights)[0]
+    f = finds[i]
+    fkey = f"{loc_key}{i}"
+    chance = weights[i] / sum(weights) * 100
+    kg = round(random.uniform(f["wmin"], f["wmax"]), 3)
+    value = round(kg * f["ppk"] * (bait["value"] if bait else 1))
+    xp_gain = round(f["xp"] * (1 + VIP["xp_bonus"] if vip else 1))
+
+    await add_item(conn, uid, f"find:{fkey}", kg)
     await conn.execute(
-        "update plots set strain=$4, planted_at=$5, ready_at=$6, last_water=$5, fert=null "
-        "where user_id=$1 and farm=$2 and slot=$3", p["user_id"], p["farm"], pl["slot"], key, t, ready)
-    return [(f"🌱 Посажено: {st['name']} в слот {pl['slot']}\n"
-             f"⏱ Созреет через {fmt_t(ready - t)}\n"
-             f"💧 Поливай каждые {st['water_every_min']} мин (иначе засохнет через ×2)", key)]
+        "insert into dig_journal(user_id,item,cnt,best_kg,best_r) values($1,$2,1,$3,$4) "
+        "on conflict (user_id,item) do update set cnt=dig_journal.cnt+1, "
+        "best_kg=greatest(dig_journal.best_kg,$3), best_r=greatest(dig_journal.best_r,$4)",
+        uid, fkey, kg, f["r"])
 
+    text = ("⛏ Раскопка!\n" + bait_note +
+            f"📍 Локация: {loc_key and loc_label(loc_key)}\n"
+            f"🎯 Ты нашёл: {f['emoji']} {f['name']}\n"
+            f"✨ Редкость: {RARITY[f['r']]}\n"
+            f"🎯 Шанс найти именно это: {chance:.1f}%\n"
+            f"⚖️ Вес: {kg:.3f} кг\n"
+            f"💰 Цена при продаже: {value}\n"
+            f"⭐ XP: +{xp_gain}")
 
-async def cmd_water(conn, p, a):
-    can = CFG["cans"][p["can"]]
-    slot = slot_arg(a)
-    plots = await get_plots(conn, p)
-    targets = [x for x in plots if state(x) == "grow" and (slot is None or x["slot"] == slot)]
-    targets.sort(key=lambda x: x["last_water"])
-    targets = targets[:can["slots"]]
-    if not targets:
-        return [("Поливать нечего.", None)]
-    for pl in targets:
-        await conn.execute(
-            "update plots set last_water=$4 where user_id=$1 and farm=$2 and slot=$3",
-            p["user_id"], p["farm"], pl["slot"], now())
-    await bump(conn, p, "water", len(targets))
-    slots = ", ".join(str(x["slot"]) for x in targets)
-    return [(f"💧 Полито: слоты {slots} ({can['name']})", None)]
+    rr = await roll_relic(conn, uid, loc_key, luck)
+    if rr:
+        text += await relic_note(conn, uid, rr[0], rr[1])
+    ct = await roll_chest(conn, uid, loc_key, luck)
+    if ct:
+        text += await chest_note(conn, uid, ct)
 
-
-async def cmd_fert(conn, p, a):
-    keys = [x for x in a if x in CFG["ferts"]]
-    if not keys:
-        return [("Выбери удобрение кнопкой в меню фермы.", None)]
-    key = keys[0]
-    slot = slot_arg(a)
-    plots = await get_plots(conn, p)
-    cand = [x for x in plots if state(x) == "grow" and not x["fert"]
-            and (slot is None or x["slot"] == slot)]
-    if not cand:
-        return [("Нет подходящего растения (нужно растущее и без удобрения).", None)]
-    if not await take_item(conn, p["user_id"], f"fert:{key}", 1):
-        return [(f"У тебя нет «{CFG['ferts'][key]['name']}». Купи в магазине, раздел «Удобрения».", None)]
-    await conn.execute("update plots set fert=$4 where user_id=$1 and farm=$2 and slot=$3",
-                       p["user_id"], p["farm"], cand[0]["slot"], key)
-    return [(f"🧪 Слот {cand[0]['slot']} удобрен: {CFG['ferts'][key]['name']} "
-             f"(+{int(CFG['ferts'][key]['bonus'] * 100)}% к урожаю)", None)]
-
-
-async def cmd_harvest(conn, p, a):
-    uid = p["user_id"]
-    slot = slot_arg(a)
-    plots = await get_plots(conn, p)
-    farm = CFG["farms"][p["farm"]]
-    quals = CFG["qualities"]
-    qsum = sum(q["chance"] for q in quals)
-    acc, dur, since = p["acc"], p["acc_dur"], p["since_treasure"]
-    vip = is_vip(p)
-    vip_b = 1 + VIP["yield_bonus"] if vip else 1
-    out, total_xp, count, grams_total, rare_cnt = [], 0, 0, 0.0, 0
-    for pl in plots:
-        if slot and pl["slot"] != slot:
-            continue
-        s = state(pl)
-        if s == "grow":
-            if slot:
-                out.append(("Ещё не созрело.", None))
-            continue
-        if s != "ready":
-            continue
-        st = CFG["strains"][pl["strain"]]
-        pot = CFG["pots"][pl["pot"]]
-        qi = random.choices(range(len(quals)), weights=[x["chance"] for x in quals])[0]
-        q = quals[qi]
-        fert_b = 1 + (CFG["ferts"][pl["fert"]]["bonus"] if pl["fert"] else 0)
-        acc_b = 1 + (CFG["accs"][acc]["bonus"] if acc else 0)
-        grams = round(st["yield_g"] * pot["yield_mult"] * farm["yield_mult"]
-                      * random.uniform(0.85, 1.15) * q["mult"] * fert_b * acc_b * vip_b, 1)
-        value = round(grams * st["price_g"])
-        await add_item(conn, uid, f"crop:{pl['strain']}", grams)
-        await conn.execute(
-            "update plots set strain=null, planted_at=null, ready_at=null, last_water=null, "
-            "fert=null where user_id=$1 and farm=$2 and slot=$3", uid, p["farm"], pl["slot"])
-        await conn.execute(
-            "insert into journal(user_id,strain,cnt,best_g,best_q) values($1,$2,1,$3,$4) "
-            "on conflict (user_id,strain) do update set cnt=journal.cnt+1, "
-            "best_g=greatest(journal.best_g,$3), best_q=greatest(journal.best_q,$4)",
-            uid, pl["strain"], grams, qi)
-        xp_gain = round(st["xp"] * (1 + VIP["xp_bonus"] if vip else 1))
-        total_xp += xp_gain
-        count += 1
-        grams_total += grams
-        rare_cnt += 1 if qi >= 2 else 0
-
-        text = (f"🌿 Сбор урожая! (слот {pl['slot']})\n"
-                f"📍 Ферма: {farm_label(p['farm'])}\n"
-                f"🪴 Горшок: {pot['liters']} л | 💡 {CFG['lights'][p['light']]['name']}\n"
-                f"🌱 Сорт: {st['name']}\n"
-                f"✨ Качество: {q['name']}\n"
-                f"🎯 Шанс этого качества: {q['chance'] / qsum * 100:.1f}%\n"
-                f"⚖️ Вес: {fmt_n(grams)} г\n"
-                f"💰 Цена при продаже: {value}\n"
-                f"⭐ XP: +{xp_gain}")
-
-        # износ аксессуара
-        if acc:
-            dur -= 1
-            if dur <= 0:
-                broken = CFG["accs"][acc]["name"]
-                spare = await conn.fetchval(
-                    "select item from inventory where user_id=$1 and item like 'acc:%' "
-                    "order by (item=$2) desc limit 1", uid, f"acc:{acc}")
-                if spare:
-                    await take_item(conn, uid, spare, 1)
-                    acc = spare.split(":", 1)[1]
-                    dur = CFG["accs"][acc]["durability"]
-                    text += f"\n\n🔧 {broken} сломался. Установлен запасной: {CFG['accs'][acc]['name']}."
-                else:
-                    acc, dur = None, 0
-                    text += f"\n\n🔧 {broken} сломался. Купи новый в магазине."
-
-        # сокровище (два подряд невозможны без нужного числа сборов)
-        since += 1
-        if since > CFG["treasure_gap"] and random.random() < CFG["treasure_chance"]:
-            since = 0
-            tr = random.choices(CFG["treasures"], weights=[x["w"] for x in CFG["treasures"]])[0]
-            if "money" in tr:
-                amount = random.randint(*tr["money"])
-                await conn.execute("update players set money=money+$2 where user_id=$1", uid, amount)
-                label = f"💰 {amount}"
+    # износ детектора
+    if det:
+        dur -= 1
+        if dur <= 0:
+            broken = CFG["dets"][det]["name"]
+            spare = await conn.fetchval(
+                "select item from inventory where user_id=$1 and item like 'det:%' "
+                "order by (item=$2) desc limit 1", uid, f"det:{det}")
+            if spare:
+                await take_item(conn, uid, spare, 1)
+                det = spare.split(":", 1)[1]
+                dur = CFG["dets"][det]["durability"]
+                text += f"\n\n🔧 {broken} сломался. Установлен запасной: {CFG['dets'][det]['name']}."
             else:
-                await add_item(conn, uid, tr["item"], tr["qty"])
-                label = f"✨ {item_name(tr['item'])} × {tr['qty']}"
-            text += ("\n\n🎁 Необычная находка!\nПока ты срезал куст, под корнями "
-                     f"нашёлся старый ящик.\n\n🎁 Внутри:\n{label}")
-        out.append((text, pl["strain"]))
+                det, dur = None, 0
+                text += f"\n\n🔧 {broken} сломался. Новый можно купить в магазине."
 
-    if not count:
-        return out or [("Собирать пока нечего.", None)]
-    old = level_of(p["xp"])
+    # необычная находка (два подряд невозможны без нужного числа раскопок)
+    since = p["since_treasure"] + 1
+    if since > CFG["treasure_gap"] and random.random() < CFG["treasure_chance"]:
+        since = 0
+        tr = random.choices(CFG["treasures"], weights=[x["w"] for x in CFG["treasures"]])[0]
+        if "money" in tr:
+            amount = random.randint(*tr["money"])
+            await conn.execute("update players set money=money+$2 where user_id=$1", uid, amount)
+            label = f"💰 {amount}"
+        else:
+            await add_item(conn, uid, tr["item"], tr["qty"])
+            label = f"✨ {item_name(tr['item'])} × {tr['qty']}"
+        text += ("\n\n🎁 Необычная находка!\nПока ты вытаскивал находку, "
+                 f"под землёй нашёлся старый сундук.\n\n🎁 Внутри:\n{label}")
+
     await conn.execute(
-        "update players set xp=xp+$2, acc=$3, acc_dur=$4, since_treasure=$5, harvests=harvests+$6 "
-        "where user_id=$1", uid, total_xp, acc, dur, since, count)
-    await bump(conn, p, "harvest", count)
-    await bump(conn, p, "grams", grams_total)
-    if rare_cnt:
-        await bump(conn, p, "rare", rare_cnt)
-    new = level_of(p["xp"] + total_xp)
+        "update players set xp=xp+$2, det=$3, det_dur=$4, since_treasure=$5, digs=digs+1, last_dig=$6 "
+        "where user_id=$1", uid, xp_gain, det, dur, since, t)
+    await bump(conn, p, "dig", 1)
+    await bump(conn, p, "kg", kg)
+    if f["r"] >= 2:
+        await bump(conn, p, "rare", 1)
+    out = [(text, loc_key)]
+    old, new = level_of(p["xp"]), level_of(p["xp"] + xp_gain)
     if new > old:
-        unlocked = [f"{v['emoji']} {v['name']}" for v in CFG["farms"].values()
+        unlocked = [f"{v['emoji']} {v['name']}" for v in CFG["locations"].values()
                     if old < v["min_level"] <= new]
-        extra = f"\nОткрыта ферма: {', '.join(unlocked)}" if unlocked else ""
+        extra = f"\nОткрыта локация: {', '.join(unlocked)}" if unlocked else ""
         out.append((f"🎉 Новый уровень: {new}!{extra}", None))
     return out
 
 
-async def cmd_clear(conn, p, a):
-    slot = slot_arg(a)
-    plots = await get_plots(conn, p)
-    pl = next((x for x in plots if x["slot"] == slot), None)
-    if not pl or state(pl) != "dead":
-        return [("Убрать можно только засохшее растение: Убрать <слот>", None)]
-    await conn.execute(
-        "update plots set strain=null, planted_at=null, ready_at=null, last_water=null, "
-        "fert=null where user_id=$1 and farm=$2 and slot=$3", p["user_id"], p["farm"], slot)
-    return [(f"🧹 Слот {slot} очищен.", None)]
-
-
-async def cmd_stock(conn, p, a):
+async def sell_items(conn, p, mode: str) -> str:
+    uid = p["user_id"]
     rows = await conn.fetch(
-        "select item, qty from inventory where user_id=$1 order by item", p["user_id"])
-    if not rows:
-        return [("📦 Склад пуст.", None)]
-    L = ["📦 Склад:"] + [f"• {item_name(r['item'])} × {fmt_n(r['qty'])}" for r in rows]
-    return [("\n".join(L), None)]
+        "select item, qty from inventory where user_id=$1 and item like 'find:%'", uid)
+    total, cnt = 0, 0
+    for r in rows:
+        key = r["item"].split(":", 1)[1]
+        f = FINDS[key]
+        if mode == "low" and f["r"] > 1:
+            continue
+        if mode == "nolegend" and f["r"] >= 4:
+            continue
+        if mode not in ("all", "low", "nolegend") and mode != key:
+            continue
+        gain = round(r["qty"] * f["ppk"] * (1 + VIP["sell_bonus"] if is_vip(p) else 1))
+        total += gain
+        cnt += 1
+        await take_item(conn, uid, r["item"], r["qty"])
+    if not cnt:
+        return "Продавать нечего."
+    await conn.execute("update players set money=money+$2 where user_id=$1", uid, total)
+    await bump(conn, p, "sell_value", total)
+    return f"💸 Продано видов находок: {cnt}\nИтого: +{total} 💰 (баланс {p['money'] + total})"
 
 
-async def cmd_journal(conn, p, a):
-    rows = {r["strain"]: r for r in await conn.fetch(
-        "select * from journal where user_id=$1", p["user_id"])}
-    L = ["📖 ЖУРНАЛ ФЕРМЕРА", ""]
-    for k, st in CFG["strains"].items():
-        r = rows.get(k)
-        if r:
-            L.append(f"🌿 {st['name']}: собрано {r['cnt']} · рекорд {fmt_n(r['best_g'])} г · "
-                     f"лучшее качество: {CFG['qualities'][r['best_q']]['name']}")
-        else:
-            L.append(f"❔ {st['name']}: ещё не собирал")
-    L.append(f"\n🌾 Всего растений: {p['harvests']}")
-    return [("\n".join(L), None)]
-
-
-async def cmd_missions(conn, p, a):
-    rows = await ensure_missions(conn, p)
-    L = ["🎯 МИССИИ НА СЕГОДНЯ", ""]
-    for r, tag in zip(rows, ["Лёгкая", "Средняя", "Сложная"]):
-        if r["claimed"]:
-            st = "✅ получено"
-        elif r["progress"] >= r["goal"]:
-            st = "🎁 готово, жми «Забрать награды»"
-        else:
-            st = f"{fmt_n(r['progress'])}/{r['goal']}"
-        L.append(f"{tag}: {r['text']}\n    {st} · награда {r['reward']} 💰")
-    L.append("\nОбновление каждый день (по UTC).")
-    return [("\n".join(L), None)]
-
-
-async def cmd_claim(conn, p, a):
-    rows = await ensure_missions(conn, p)
-    ready = [r for r in rows if r["progress"] >= r["goal"] and not r["claimed"]]
-    if not ready:
-        return [("Готовых наград пока нет.", None)]
-    total = sum(r["reward"] for r in ready)
-    for r in ready:
-        await conn.execute(
-            "update missions set claimed=true where user_id=$1 and day=$2 and idx=$3",
-            p["user_id"], today(), r["idx"])
-    await conn.execute("update players set money=money+$2 where user_id=$1", p["user_id"], total)
-    return [(f"🎁 Награды за миссии: +{total} 💰 (баланс {p['money'] + total})", None)]
-
-
+# ---------- магазин, предметы ----------
 STAR_WORDS = {"звёзды", "звезды", "звезд", "⭐", "stars", "star"}
-CATS = [("strains", "seed", "seed_price"), ("ferts", "fert", "price"), ("lights", "light", "price"),
-        ("accs", "acc", "price"), ("cans", "can", "price"), ("pots", "pot", "price")]
+CATS = [("tools", "tool", "price"), ("dets", "det", "price"), ("baits", "bait", "price"),
+        ("vehicles", "vehicle", "price"), ("fuels", "fuel", "price"), ("keys", "key", "price")]
+CAT_TITLES = {"tools": "⛏ Лопаты", "dets": "📡 Детекторы", "baits": "🗺 Карты",
+              "vehicles": "🚜 Транспорт", "fuels": "⛽ Топливо", "keys": "🗝 Ключи"}
+CAT_OF = {key: cat for cat, _, _ in CATS for key in CFG[cat]}
 
 
 def unit_stars(unit_price: int, cfg_item: dict) -> int:
@@ -570,42 +440,95 @@ def resolve_item(key: str, qty: int = 1):
     for cat, kind, pf in CATS:
         s_ = CFG[cat].get(key)
         if not s_ or not s_[pf]:
-            continue                         # бесплатные стартовые предметы не продаются
-        q = max(1, min(int(qty), 100)) if kind in ("seed", "fert") else 1
+            continue                         # бесплатная стартовая лопата не продаётся
+        q = max(1, min(int(qty), 100)) if kind in ("bait", "fuel", "key") else 1
         unit = s_[pf]
-        if kind == "seed":
-            label = f"семена {s_['name']} × {q}"
-        elif kind == "fert":
-            label = f"{s_['name']} × {q}"
-        elif kind == "pot":
-            label = f"горшок «{key}» ({s_['liters']} л)"
-        else:
-            label = s_["name"]
+        label = f"{s_['name']} × {q}" if kind in ("bait", "fuel", "key") else s_["name"]
         return dict(kind=kind, key=key, qty=q, price=unit * q,
                     stars=unit_stars(unit, s_) * q, need=s_.get("min_level", 1), label=label)
     return None
 
 
+def check_buy_basic(p, it):
+    """Проверки без базы: уровень и лопата. Текст ошибки или None."""
+    if level_of(p["xp"]) < it["need"]:
+        return f"🔒 {it['label']} доступно с {it['need']} уровня."
+    if it["kind"] == "tool":
+        order = list(CFG["tools"])
+        if order.index(it["key"]) <= order.index(p["tool"]):
+            return "У тебя уже есть лопата не хуже этой."
+    return None
+
+
+async def check_buy(conn, p, it):
+    """Полная проверка перед покупкой (с базой). Текст ошибки или None."""
+    err = check_buy_basic(p, it)
+    if err:
+        return err
+    if it["kind"] == "vehicle":
+        if await conn.fetchval("select 1 from vehicles where user_id=$1 and key=$2", p["user_id"], it["key"]):
+            return "Этот транспорт у тебя уже есть."
+    return None
+
+
 async def deliver_item(conn, uid, it) -> str:
     kind, key, qty = it["kind"], it["key"], it["qty"]
-    if kind in ("seed", "fert"):
-        await add_item(conn, uid, f"{kind}:{key}", qty)
-    elif kind == "light":
-        await conn.execute("update players set light=$2 where user_id=$1", uid, key)
-    elif kind == "can":
-        await conn.execute("update players set can=$2 where user_id=$1", uid, key)
-    elif kind == "pot":
-        await add_item(conn, uid, f"pot:{key}", 1)
-        return "\n📦 Горшок на складе. Установить: Ферма → 🪴 Горшки."
-    elif kind == "acc":
-        cur = await conn.fetchval("select acc from players where user_id=$1", uid)
+    if kind == "tool":
+        await conn.execute("update players set tool=$2 where user_id=$1", uid, key)
+    elif kind == "det":
+        cur = await conn.fetchval("select det from players where user_id=$1", uid)
         if cur is None:
-            await conn.execute("update players set acc=$2, acc_dur=$3 where user_id=$1",
-                               uid, key, CFG["accs"][key]["durability"])
+            await conn.execute("update players set det=$2, det_dur=$3 where user_id=$1",
+                               uid, key, CFG["dets"][key]["durability"])
         else:
-            await add_item(conn, uid, f"acc:{key}", 1)
+            await add_item(conn, uid, f"det:{key}", 1)
             return "\n📦 Положен на склад как запасной (заменит сломанный)."
+    elif kind == "bait":
+        await add_item(conn, uid, f"bait:{key}", qty)
+        cur = await conn.fetchval("select bait from players where user_id=$1", uid)
+        if cur is None:
+            await conn.execute("update players set bait=$2 where user_id=$1", uid, key)
+            return "\n🗺 Карта выбрана для раскопок."
+    elif kind == "fuel":
+        await add_item(conn, uid, f"fuel:{key}", qty)
+    elif kind == "vehicle":
+        await conn.execute("insert into vehicles(user_id,key) values($1,$2) on conflict do nothing", uid, key)
+        await conn.execute("update players set vehicle=$2 where user_id=$1", uid, key)
+        return "\n🚜 Транспорт куплен и выбран. Открой раздел «Экспедиции»."
+    elif kind == "relic":
+        await add_item(conn, uid, f"relic:{key}", 1)
+        await conn.execute(
+            "insert into relic_journal(user_id,key,cnt) values($1,$2,1) "
+            "on conflict (user_id,key) do update set cnt=relic_journal.cnt+1", uid, key)
+    elif kind == "key":
+        await add_item(conn, uid, f"key:{key}", qty)
+    elif kind == "chest":
+        await add_item(conn, uid, f"chest:{key}", qty)
     return ""
+
+
+async def cmd_buy(conn, p, a):
+    key, rest = a[0], a[1:]
+    stars_mode = any(x in STAR_WORDS for x in rest)
+    qty = next((int(x) for x in rest if x.isdigit()), 1)
+    it = resolve_item(key, qty)
+    if not it:
+        return [("Такого товара нет.", None)]
+    err = await check_buy(conn, p, it)
+    if err:
+        return [(err, None)]
+    if stars_mode:
+        left = await spend_stars(conn, p["user_id"], it["stars"], f"покупка: {it['label']}")
+        if left is None:
+            bal = int(await conn.fetchval("select stars from players where user_id=$1", p["user_id"]) or 0)
+            return [(f"⭐ Не хватает звёзд: нужно {it['stars']}, у тебя {bal}.\nПополни баланс кнопкой «➕ Пополнить ⭐».", None)]
+        note = await deliver_item(conn, p["user_id"], it)
+        return [(f"✅ Куплено за ⭐: {it['label']} — {it['stars']} ⭐ (остаток {left}){note}", None)]
+    if p["money"] < it["price"]:
+        return [(f"Не хватает денег: нужно {it['price']}, у тебя {p['money']}.\nМожно купить за ⭐ (кнопка ⭐ в карточке товара).", None)]
+    await conn.execute("update players set money=money-$2 where user_id=$1", p["user_id"], it["price"])
+    note = await deliver_item(conn, p["user_id"], it)
+    return [(f"✅ Куплено: {it['label']} за {it['price']} 💰{note}", None)]
 
 
 def b64e(x: str) -> str:
@@ -623,14 +546,15 @@ def build_invoice(p, spec: str):
         if parts[0] == "buy":
             it = resolve_item(parts[1], int(parts[2]))
             if not it:
-                return "Такого товара нет. Загляни в магазин."
-            if level_of(p["xp"]) < it["need"]:
-                return f"🔒 {it['label']} доступно с {it['need']} уровня."
+                return "Такого товара нет."
+            err = check_buy_basic(p, it)
+            if err:
+                return err
             title, desc, stars = it["label"], f"Покупка в игре: {it['label']}", it["stars"]
         elif parts[0] == "prod":
             pr = CFG["stars_products"].get(parts[1])
             if not pr:
-                return "Такого товара нет. Список: «Звёзды»."
+                return "Такого товара нет."
             title, desc, stars = pr["title"], pr["desc"], pr["stars"]
         else:
             return "Неизвестный товар."
@@ -640,80 +564,586 @@ def build_invoice(p, spec: str):
             "payload": f"{p['user_id']}|{spec}", "spec": spec}
 
 
-async def cmd_buy(conn, p, a):
-    if not a:
-        return [("Выбери товар в магазине.", None)]
-    key, rest = a[0], a[1:]
-    stars_mode = any(x in STAR_WORDS for x in rest)
-    qty = next((int(x) for x in rest if x.isdigit()), 1)
-    it = resolve_item(key, qty)
-    if not it:
-        return [("Такого товара нет. Загляни в магазин.", None)]
-    if level_of(p["xp"]) < it["need"]:
-        return [(f"🔒 {it['label']} доступно с {it['need']} уровня.", None)]
-    if stars_mode:
-        inv = build_invoice(p, f"buy|{key}|{it['qty']}")
-        return [inv] if isinstance(inv, dict) else [(inv, None)]
-    if p["money"] < it["price"]:
-        return [(f"Не хватает денег: нужно {it['price']}, у тебя {p['money']}.\nМожно оплатить ⭐ Stars.", None)]
-    await conn.execute("update players set money=money-$2 where user_id=$1",
-                       p["user_id"], it["price"])
-    note = await deliver_item(conn, p["user_id"], it)
-    return [(f"✅ Куплено: {it['label']} за {it['price']} 💰{note}", None)]
+# ---------- сундуки и ключи ----------
+def key_label(k: str) -> str:
+    return f"{KEYS[k]['emoji']} {KEYS[k]['name']}"
 
 
-async def cmd_pot(conn, p, a):
-    slot = slot_arg(a)
-    keys = [x for x in a if x in CFG["pots"]]
-    if not slot or not keys:
-        return [("Выбери слот и горшок кнопками в меню фермы.", None)]
-    key = keys[0]
-    plots = await get_plots(conn, p)
-    pl = next((x for x in plots if x["slot"] == slot), None)
-    if not pl:
-        return [("Такого слота нет.", None)]
-    if pl["strain"]:
-        return [("Сначала освободи слот.", None)]
-    paid = ""
-    if await take_item(conn, p["user_id"], f"pot:{key}", 1):
-        paid = " (со склада)"
+async def roll_chest(conn, uid, loc_key, luck, mult=1.0):
+    if random.random() >= CHC["chance"] * mult:
+        return None
+    idx = list(CFG["locations"]).index(loc_key)
+    lk = min(max(luck, 1.0), CHC["luck_cap"])
+    ws = [w * (1 + idx * CHC["loc_boost"] * t) * (lk if t >= 2 else 1.0) for t, w in enumerate(CHC["tier_w"])]
+    tier = f"c{random.choices(range(len(ws)), weights=ws)[0] + 1}"
+    await add_item(conn, uid, f"chest:{tier}", 1)
+    return tier
+
+
+async def chest_note(conn, uid, tier) -> str:
+    c = CH[tier]
+    have = int(await conn.fetchval("select qty from inventory where user_id=$1 and item=$2",
+                                   uid, f"key:{c['key']}") or 0)
+    return (f"\n\n📦 Найден сундук: {c['emoji']} {c['name']}\n"
+            f"🔒 Нужен ключ: {key_label(c['key'])} (у тебя: {have})\nОткрыть: Меню → 📦 Сундуки")
+
+
+async def grant_finds(conn, uid, loc_key, n, luck):
+    finds = CFG["locations"][loc_key]["finds"]
+    weights = [f["w"] * (luck if f["r"] >= 2 else 1.0) for f in finds]
+    got = {}
+    for _ in range(n):
+        i = random.choices(range(len(finds)), weights=weights)[0]
+        kg = round(random.uniform(finds[i]["wmin"], finds[i]["wmax"]), 3)
+        g = got.setdefault(i, [0, 0.0, 0.0])
+        g[0] += 1
+        g[1] += kg
+        g[2] = max(g[2], kg)
+    for i, (cnt, kg, best) in got.items():
+        await add_item(conn, uid, f"find:{loc_key}{i}", round(kg, 3))
+        await conn.execute(
+            "insert into dig_journal(user_id,item,cnt,best_kg,best_r) values($1,$2,$3,$4,$5) "
+            "on conflict (user_id,item) do update set cnt=dig_journal.cnt+$3, "
+            "best_kg=greatest(dig_journal.best_kg,$4), best_r=greatest(dig_journal.best_r,$5)",
+            uid, f"{loc_key}{i}", cnt, best, finds[i]["r"])
+    return got
+
+
+async def chest_open(conn, p, tier) -> str:
+    uid = p["user_id"]
+    c = CH[tier]
+    kitem = f"key:{c['key']}"
+    chests = int(await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, f"chest:{tier}") or 0)
+    keys = int(await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, kitem) or 0)
+    if chests < 1:
+        return "У тебя нет такого сундука."
+    if keys < 1:
+        return f"🔒 Нужен ключ: {key_label(c['key'])}. Купи его в магазине, раздел «Ключи»."
+    await take_item(conn, uid, f"chest:{tier}", 1)
+    await take_item(conn, uid, kitem, 1)
+    order = list(CFG["locations"])
+    loc_key = order[min(order.index(p["loc"]), c["max_loc"])]     # ценность находок ограничена рангом сундука
+    lvl = level_of(p["xp"])
+    unlocked = [k for k in order[:c["max_loc"] + 1] if CFG["locations"][k]["min_level"] <= lvl] or [order[0]]
+    L = [f"{c['emoji']} {c['name']} открыт!", f"🗝 Потрачен ключ: {KEYS[c['key']]['name']}", "", "🎁 Внутри:"]
+    money = 0
+    for _ in range(c["rolls"]):
+        e = random.choices(c["loot"], weights=[x["w"] for x in c["loot"]])[0]
+        t = e["t"]
+        if t == "coins":
+            amt = random.randint(e["min"], e["max"])
+            money += amt
+            L.append(f"💰 {amt}")
+        elif t == "finds":
+            n = random.randint(e["min"], e["max"])
+            got = await grant_finds(conn, uid, loc_key, n, c["luck"])
+            finds = CFG["locations"][loc_key]["finds"]
+            kg = sum(g[1] for g in got.values())
+            val = sum(g[1] * finds[i]["ppk"] for i, g in got.items())
+            top = sorted(got.items(), key=lambda kv: (-finds[kv[0]]["r"], finds[kv[0]]["name"]))[:4]
+            L.append(f"💎 Находки ({loc_label(loc_key)}): {n} шт. · {kg:.2f} кг · ≈{round(val)} 💰")
+            L += [f"   • {finds[i]['emoji']} {finds[i]['name']} × {g[0]} · {RARITY[finds[i]['r']].split(' ')[0]}" for i, g in top]
+        elif t == "item":
+            q = random.randint(e["min"], e["max"])
+            kind, key = e["item"].split(":", 1)
+            await deliver_item(conn, uid, dict(kind=kind, key=key, qty=q))
+            L.append(f"✨ {item_name(e['item'])} × {q}")
+        elif t == "relic":
+            lk = random.choices(unlocked, weights=[order.index(k) + 1 for k in unlocked])[0]
+            key, new = await give_relic(conn, uid, lk)
+            r = RELICS[key]
+            L.append(f"🏺 Коллекционная находка: {r['emoji']} {r['name']} · ценность {r['value']}" + (" 🆕" if new else ""))
+    if money:
+        await conn.execute("update players set money=money+$2 where user_id=$1", uid, money)
+    L.append("\nВсё добавлено на склад.")
+    return "\n".join(L)
+
+
+def loot_lines(c):
+    tot = sum(e["w"] for e in c["loot"])
+    out = []
+    for e in sorted(c["loot"], key=lambda x: -x["w"]):
+        pct = e["w"] / tot * 100
+        if e["t"] == "coins":
+            what = f"💰 Монеты {e['min']}–{e['max']}"
+        elif e["t"] == "finds":
+            what = (f"💎 Находки × {e['min']}–{e['max']} (твоя локация, но не выше "
+                    f"«{CFG['locations'][list(CFG['locations'])[c['max_loc']]]['name']}», удача ×{c['luck']})")
+        elif e["t"] == "relic":
+            what = "🏺 Коллекционная находка"
+        else:
+            what = f"✨ {item_name(e['item'])} × {e['min']}" + (f"–{e['max']}" if e["max"] != e["min"] else "")
+        out.append(f"{pct:.1f}% · {what}")
+    return out
+
+
+async def chests_screen(conn, p, note=""):
+    uid = p["user_id"]
+    inv = {r["item"]: int(r["qty"]) for r in await conn.fetch(
+        "select item, qty from inventory where user_id=$1 and (item like 'chest:%' or item like 'key:%')", uid)}
+    L = ([note, ""] if note else []) + [
+        "📦 СУНДУКИ", "Сундуки выпадают при раскопках и экспедициях. Для каждого нужен свой ключ "
+        "(магазин, раздел «Ключи»; иногда ключи находятся в сундуках).", ""]
+    rows = []
+    for tier, c in CH.items():
+        n, k = inv.get(f"chest:{tier}", 0), inv.get(f"key:{c['key']}", 0)
+        L.append(f"{c['emoji']} {c['name']} ×{n} · {key_label(c['key'])} ×{k}")
+        row = []
+        if n:
+            row.append((f"{'🔓' if k else '🔒'} Открыть {c['emoji']} ×{n}", mcd(uid, "chopen", tier)))
+        row.append((f"ℹ️ {c['name']}", mcd(uid, "chinfo", tier)))
+        rows.append(row)
+    rows += [[("🗝 Купить ключи", mcd(uid, "cat", "keys"))], [("🏠 Меню", mcd(uid, "home"))]]
+    return "\n".join(L), kb(rows)
+
+
+async def chest_info_screen(conn, p, tier):
+    uid = p["user_id"]
+    c = CH[tier]
+    L = [f"{c['emoji']} {c['name']}", f"Ключ: {key_label(c['key'])} · цена {KEYS[c['key']]['price']} 💰 "
+         f"или ⭐{unit_stars(KEYS[c['key']]['price'], KEYS[c['key']])}",
+         f"Бросков награды: {c['rolls']}", "", "Шансы награды (за один бросок):", *loot_lines(c),
+         "", "Содержимое определяется случайно. Всё выдаётся только внутри игры."]
+    return "\n".join(L), kb([[("🗝 Купить ключ", mcd(uid, "item", c["key"]))],
+                             [("⬅ Сундуки", mcd(uid, "chests")), ("🏠 Меню", mcd(uid, "home"))]])
+
+
+async def stars_screen(conn, p, note=""):
+    uid = p["user_id"]
+    bal = int(await conn.fetchval("select stars from players where user_id=$1", uid) or 0)
+    tops = [(k, pr) for k, pr in CFG["stars_products"].items() if pr.get("credit")]
+    spend = [(k, pr) for k, pr in CFG["stars_products"].items() if not pr.get("credit")]
+    L = ([note, ""] if note else []) + [
+        "⭐ ЗВЁЗДЫ — игровая валюта", f"Баланс: {bal} ⭐", "",
+        "Звёздами платишь в магазине (кнопка ⭐), за ключи, VIP и пакеты. Пополнение идёт через Telegram Stars "
+        "(1 к 1), счёт приходит в личку бота. Звёзды нельзя вывести. Вопросы по оплате: /paysupport.", "",
+        "Пополнить:"]
+    rows = chunk([(f"➕ {pr['credit']} ⭐", mcd(uid, "prod", k)) for k, pr in tops], 3)
+    L.append("Потратить на VIP и пакеты:")
+    rows += chunk([(f"{pr['title']} · {pr['stars']}⭐", mcd(uid, "prod", k)) for k, pr in spend], 2)
+    rows.append([("🏠 Меню", mcd(uid, "home"))])
+    return "\n".join(L), kb(rows)
+
+
+# ---------- коллекционные находки ----------
+async def collector_sets(conn, uid) -> int:
+    rows = await conn.fetch("select key from relic_journal where user_id=$1", uid)
+    have = {r["key"] for r in rows}
+    return sum(1 for lk, loc in CFG["locations"].items()
+               if loc.get("relics") and all(f"{lk}r{i}" in have for i in range(len(loc["relics"]))))
+
+
+async def give_relic(conn, uid, loc_key):
+    rel = CFG["locations"][loc_key]["relics"]
+    i = random.choices(range(len(rel)), weights=[r["w"] for r in rel])[0]
+    key = f"{loc_key}r{i}"
+    prev = await conn.fetchval("select cnt from relic_journal where user_id=$1 and key=$2", uid, key)
+    await add_item(conn, uid, f"relic:{key}", 1)
+    await conn.execute(
+        "insert into relic_journal(user_id,key,cnt) values($1,$2,1) "
+        "on conflict (user_id,key) do update set cnt=relic_journal.cnt+1", uid, key)
+    return key, prev is None
+
+
+async def roll_relic(conn, uid, loc_key, luck, mult=1.0):
+    loc = CFG["locations"][loc_key]
+    if not loc.get("relics"):
+        return None
+    chance = loc["relic_chance"] * mult * min(max(luck, 1.0) ** 0.5, 2.0)
+    if random.random() >= chance:
+        return None
+    return await give_relic(conn, uid, loc_key)
+
+
+async def relic_found_count(conn, uid, loc_key) -> int:
+    return int(await conn.fetchval(
+        "select count(*) from relic_journal where user_id=$1 and key like $2", uid, f"{loc_key}r%") or 0)
+
+
+async def relic_note(conn, uid, key, new) -> str:
+    r = RELICS[key]
+    loc = CFG["locations"][r["loc"]]
+    got = await relic_found_count(conn, uid, r["loc"])
+    L = ["", "", "🏺 Коллекционная находка!", f"{r['emoji']} {r['name']}", f"💰 Ценность: {r['value']}",
+         ("🆕 Новая запись в коллекции" if new else "Дубликат: можно продать")
+         + f" · {loc['emoji']} {loc['name']}: {got}/{len(loc['relics'])}"]
+    if new and got == len(loc["relics"]):
+        L.append("🎉 Коллекция локации собрана! Награда ждёт в разделе «Коллекция».")
+    return "\n".join(L)
+
+
+async def relic_counts(conn, uid) -> dict:
+    rows = await conn.fetch("select item, qty from inventory where user_id=$1 and item like 'relic:%'", uid)
+    return {r["item"].split(":", 1)[1]: int(r["qty"]) for r in rows}
+
+
+async def rel_screen(conn, p, note=""):
+    uid = p["user_id"]
+    found = {r["key"] for r in await conn.fetch("select key from relic_journal where user_id=$1", uid)}
+    L = ["🏺 КОЛЛЕКЦИОННЫЕ НАХОДКИ", ""]
+    btns = []
+    for lk, loc in CFG["locations"].items():
+        got = sum(1 for i in range(len(loc["relics"])) if f"{lk}r{i}" in found)
+        full = " 🎉" if got == len(loc["relics"]) else ""
+        L.append(f"{loc['emoji']} {loc['name']}: {got}/{len(loc['relics'])}{full}")
+        btns.append((f"{loc['emoji']} {loc['name']} {got}/{len(loc['relics'])}", mcd(uid, "reloc", lk)))
+    L += ["", f"Всего собрано: {len(found)}/{len(RELICS)}",
+          f"Каждая собранная коллекция даёт награду и +{int(COLL['luck_per_set'] * 100)}% к удаче.",
+          "Коллекционные находки выпадают при раскопках и экспедициях, не заменяя обычную находку."]
+    return (note + "\n\n" if note else "") + "\n".join(L), kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]])
+
+
+async def reloc_screen(conn, p, lk, note=""):
+    uid = p["user_id"]
+    loc = CFG["locations"][lk]
+    found = {r["key"] for r in await conn.fetch("select key from relic_journal where user_id=$1", uid)}
+    have = await relic_counts(conn, uid)
+    L = [f"🏺 {loc['emoji']} {loc['name']}", ""]
+    btns = []
+    for i, r in enumerate(loc["relics"]):
+        key = f"{lk}r{i}"
+        if key in found:
+            q = have.get(key, 0)
+            L.append(f"{r['emoji']} {r['name']} · ценность {r['value']} · у тебя ×{q}")
+            if q:
+                btns.append((f"{r['emoji']} {r['name']} ×{q}", mcd(uid, "relic", key)))
+        else:
+            L.append("❔ ??? · ещё не найдено")
+    complete = all(f"{lk}r{i}" in found for i in range(len(loc["relics"])))
+    rows = [[b] for b in btns]
+    if complete:
+        claimed = await conn.fetchval("select 1 from inventory where user_id=$1 and item=$2", uid, f"set:{lk}")
+        if claimed:
+            L.append("\n✅ Награда за коллекцию получена.")
+        else:
+            L.append(f"\n🎁 Коллекция собрана! Награда: {loc['set_reward']} 💰")
+            rows.append([("🎁 Забрать награду", mcd(uid, "relset", lk))])
+    rows.append([("⬅ Коллекция", mcd(uid, "rel")), ("🏠 Меню", mcd(uid, "home"))])
+    return (note + "\n\n" if note else "") + "\n".join(L), kb(rows)
+
+
+async def relic_screen(conn, p, key, note=""):
+    uid = p["user_id"]
+    r = RELICS[key]
+    q = (await relic_counts(conn, uid)).get(key, 0)
+    sell_bonus = 1 + VIP["sell_bonus"] if is_vip(p) else 1
+    L = ([note, ""] if note else []) + [f"{r['emoji']} {r['name']}", f"💰 Ценность: {round(r['value'] * sell_bonus)}",
+                                         f"У тебя: ×{q}"]
+    rows = []
+    if q > 1:
+        rows.append([("💸 Продать 1", mcd(uid, "relsell", key, "1")),
+                     ("💸 Дубликаты (оставить 1)", mcd(uid, "relsell", key, "dup"))])
+        rows.append([("💸 Продать все", mcd(uid, "relsell", key, "all"))])
+    elif q == 1:
+        L.append("Единственная копия. Её можно оставить в коллекции или продать.")
+        rows.append([("💸 Продать", mcd(uid, "relsell", key, "1"))])
+    rows.append([("⬅ Локация", mcd(uid, "reloc", r["loc"])), ("🏠 Меню", mcd(uid, "home"))])
+    return "\n".join(L), kb(rows)
+
+
+async def relic_sell(conn, p, key, mode) -> str:
+    uid = p["user_id"]
+    r = RELICS[key]
+    have = (await relic_counts(conn, uid)).get(key, 0)
+    if have <= 0:
+        return "У тебя нет такой находки."
+    n = {"1": 1, "dup": have - 1, "all": have}[mode]
+    if n <= 0:
+        return "Дубликатов нет, оставляю единственную копию."
+    n = min(n, have)
+    gain = round(n * r["value"] * (1 + VIP["sell_bonus"] if is_vip(p) else 1))
+    await take_item(conn, uid, f"relic:{key}", n)
+    await conn.execute("update players set money=money+$2 where user_id=$1", uid, gain)
+    await bump(conn, p, "sell_value", gain)
+    return f"💸 Продано: {r['emoji']} {r['name']} × {n}\n+{gain} 💰"
+
+
+async def relic_set_claim(conn, p, lk) -> str:
+    uid = p["user_id"]
+    loc = CFG["locations"][lk]
+    found = {r["key"] for r in await conn.fetch("select key from relic_journal where user_id=$1", uid)}
+    if not all(f"{lk}r{i}" in found for i in range(len(loc["relics"]))):
+        return "Коллекция ещё не собрана."
+    if await conn.fetchval("select 1 from inventory where user_id=$1 and item=$2", uid, f"set:{lk}"):
+        return "Награда уже получена."
+    await add_item(conn, uid, f"set:{lk}", 1)
+    await conn.execute("update players set money=money+$2 where user_id=$1", uid, loc["set_reward"])
+    return f"🎁 Коллекция «{loc['name']}» завершена!\n+{loc['set_reward']} 💰 и +{int(COLL['luck_per_set'] * 100)}% к удаче навсегда."
+
+
+# ---------- экспедиции ----------
+async def get_vehicle(conn, p):
+    if not p["vehicle"]:
+        return None
+    return await conn.fetchrow("select * from vehicles where user_id=$1 and key=$2", p["user_id"], p["vehicle"])
+
+
+def exp_duration(p, veh, route) -> float:
+    v = CFG["vehicles"][veh["key"]]
+    t = ROUTES[route]["minutes"] * 60 * v["time_mult"] * (1 - MODS["engine"]["per"] * veh["engine"])
+    return t * (1 - VIP["cooldown_cut"]) if is_vip(p) else t
+
+
+def exp_haul_n(veh, route) -> int:
+    return max(1, round(CFG["vehicles"][veh["key"]]["haul"] * ROUTES[route]["haul_mult"])) + veh["cargo"] // 2
+
+
+def mod_price(veh, mk) -> int:
+    return round(MODS[mk]["base_price"] * CFG["vehicles"][veh["key"]]["module_mult"] * (veh[mk] + 1))
+
+
+async def exp_start(conn, p, route) -> str:
+    uid = p["user_id"]
+    veh = await get_vehicle(conn, p)
+    if not veh:
+        return "У тебя нет транспорта. Купи его в магазине."
+    if await conn.fetchrow("select 1 from expeditions where user_id=$1", uid):
+        return "Экспедиция уже в пути."
+    r = ROUTES[route]
+    if level_of(p["xp"]) < r["min_level"]:
+        return f"🔒 {r['name']} доступна с {r['min_level']} уровня."
+    if not await take_item(conn, uid, "fuel:топливо", r["fuel"]):
+        return f"⛽ Не хватает топлива: нужно {r['fuel']}. Купи его в магазине."
+    dur = exp_duration(p, veh, route)
+    await conn.execute(
+        "insert into expeditions(user_id,vehicle,route,loc,started,ready) values($1,$2,$3,$4,$5,$6)",
+        uid, veh["key"], route, p["loc"], now(), now() + dur)
+    return (f"🚜 Экспедиция отправилась!\n📍 Локация: {loc_label(p['loc'])}\n"
+            f"🚜 {CFG['vehicles'][veh['key']]['name']} · {r['name']}\n"
+            f"⏱ Вернётся через {fmt_t(dur)}\n⛽ Потрачено топлива: {r['fuel']}")
+
+
+async def exp_claim(conn, p):
+    uid = p["user_id"]
+    ex = await conn.fetchrow("select * from expeditions where user_id=$1", uid)
+    if not ex:
+        return [("Сейчас нет экспедиции в пути.", None)]
+    if ex["ready"] > now():
+        return [(f"🚜 Экспедиция ещё в пути. Осталось: {fmt_t(ex['ready'] - now())}", None)]
+    veh = await conn.fetchrow("select * from vehicles where user_id=$1 and key=$2", uid, ex["vehicle"])
+    loc_key = ex["loc"]
+    loc = CFG["locations"][loc_key]
+    finds = loc["finds"]
+    route = ROUTES[ex["route"]]
+    vip = is_vip(p)
+
+    luck = route["luck"] * (1 + MODS["radar"]["per"] * veh["radar"])
+    luck *= 1 + COLL["luck_per_set"] * await collector_sets(conn, uid)
+    luck *= 1 + VIP["luck_bonus"] if vip else 1
+    n = exp_haul_n(veh, ex["route"])
+    lost_n = 0
+    if random.random() < max(0.0, EXPC["loss_chance"] - MODS["hull"]["per"] * veh["hull"]):
+        lost_n = max(1, round(n * EXPC["loss_cut"]))
+        n = max(1, n - lost_n)
+
+    weights = [f["w"] * (luck if f["r"] >= 2 else 1.0) for f in finds]
+    kgm = 1 + MODS["cargo"]["per"] * veh["cargo"]
+    got, rare, xp_total, relics, chests = {}, 0, 0.0, [], {}
+    for _ in range(n):
+        i = random.choices(range(len(finds)), weights=weights)[0]
+        f = finds[i]
+        kg = round(random.uniform(f["wmin"], f["wmax"]) * kgm, 3)
+        g = got.setdefault(i, [0, 0.0, 0.0])
+        g[0] += 1
+        g[1] += kg
+        g[2] = max(g[2], kg)
+        xp_total += f["xp"] * EXPC["xp_mult"]
+        rare += 1 if f["r"] >= 2 else 0
+        rr = await roll_relic(conn, uid, loc_key, luck, EXPC["relic_mult"])
+        if rr:
+            relics.append(rr)
+        ct = await roll_chest(conn, uid, loc_key, luck, CHC["exp_mult"])
+        if ct:
+            chests[ct] = chests.get(ct, 0) + 1
+    xp_gain = round(xp_total * (1 + VIP["xp_bonus"] if vip else 1))
+
+    total_kg = total_val = 0.0
+    for i, (cnt, kg, best) in got.items():
+        f = finds[i]
+        await add_item(conn, uid, f"find:{loc_key}{i}", round(kg, 3))
+        await conn.execute(
+            "insert into dig_journal(user_id,item,cnt,best_kg,best_r) values($1,$2,$3,$4,$5) "
+            "on conflict (user_id,item) do update set cnt=dig_journal.cnt+$3, "
+            "best_kg=greatest(dig_journal.best_kg,$4), best_r=greatest(dig_journal.best_r,$5)",
+            uid, f"{loc_key}{i}", cnt, best, f["r"])
+        total_kg += kg
+        total_val += kg * f["ppk"]
+    await conn.execute("delete from expeditions where user_id=$1", uid)
+    await conn.execute("update players set xp=xp+$2 where user_id=$1", uid, xp_gain)
+    await bump(conn, p, "kg", total_kg)
+    if rare:
+        await bump(conn, p, "rare", rare)
+
+    top = sorted(got.items(), key=lambda kv: (-finds[kv[0]]["r"], finds[kv[0]]["name"]))
+    L = ["🚜 Экспедиция вернулась!", f"📍 Локация: {loc_label(loc_key)}",
+         f"🚜 {CFG['vehicles'][veh['key']]['name']} · {route['name']}",
+         f"📦 Привезено находок: {n} · {total_kg:.2f} кг"]
+    for i, (cnt, kg, best) in top[:8]:
+        f = finds[i]
+        L.append(f"• {f['emoji']} {f['name']} × {cnt} · {kg:.2f} кг · {RARITY[f['r']].split(' ')[0]}")
+    if len(top) > 8:
+        L.append(f"…и ещё {len(top) - 8} видов")
+    L += [f"💰 Ценность груза ≈ {round(total_val)}", f"⭐ XP: +{xp_gain}"]
+    if lost_n:
+        L.append(f"🛠 В пути случилась поломка: потеряно находок: {lost_n}")
+    new_any = False
+    for key, new in relics:
+        r = RELICS[key]
+        new_any = new_any or new
+        L.append(f"🏺 Коллекционная находка: {r['emoji']} {r['name']} · ценность {r['value']}" + (" 🆕" if new else ""))
+    if chests:
+        L.append("📦 Сундуки: " + ", ".join(f"{CH[t]['emoji']} {CH[t]['name']} ×{n}" for t, n in sorted(chests.items()))
+                 + " (открыть: Меню → 📦 Сундуки)")
+    if new_any and await relic_found_count(conn, uid, loc_key) == len(loc["relics"]):
+        L.append("🎉 Коллекция локации собрана! Награда в разделе «Коллекция».")
+    out = [("\n".join(L), None)]
+    old, new_lvl = level_of(p["xp"]), level_of(p["xp"] + xp_gain)
+    if new_lvl > old:
+        unlocked = [f"{v['emoji']} {v['name']}" for v in CFG["locations"].values()
+                    if old < v["min_level"] <= new_lvl]
+        extra = f"\nОткрыта локация: {', '.join(unlocked)}" if unlocked else ""
+        out.append((f"🎉 Новый уровень: {new_lvl}!{extra}", None))
+    return out
+
+
+async def mod_upgrade(conn, p, mk) -> str:
+    if mk not in MODS:
+        return "Неизвестный модуль."
+    veh = await get_vehicle(conn, p)
+    if not veh:
+        return "Нет транспорта."
+    m = MODS[mk]
+    if veh[mk] >= m["max"]:
+        return "Модуль уже на максимальном уровне."
+    price = mod_price(veh, mk)
+    money = await conn.fetchval("select money from players where user_id=$1", p["user_id"])
+    if money < price:
+        return f"Не хватает денег: нужно {price}, у тебя {money}."
+    await conn.execute("update players set money=money-$2 where user_id=$1", p["user_id"], price)
+    await conn.execute(f"update vehicles set {mk}={mk}+1 where user_id=$1 and key=$2", p["user_id"], veh["key"])
+    return (f"✅ {m['name']}: уровень {veh[mk] + 1}/{m['max']}\n"
+            f"Списано {price} 💰 · остаток {money - price} 💰")
+
+
+async def exp_screen(conn, p, note=""):
+    uid = p["user_id"]
+    pre = (note + "\n\n") if note else ""
+    veh = await get_vehicle(conn, p)
+    if not veh:
+        return (pre + "🚜 ЭКСПЕДИЦИИ\nТранспорт с командой копает за тебя, пока ты занят, и привозит целую "
+                "партию находок. Для этого нужен транспорт и топливо.",
+                kb([[("🛒 Купить транспорт", mcd(uid, "cat", "vehicles"))], [("🏠 Меню", mcd(uid, "home"))]]))
+    fuel = int(await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, "fuel:топливо") or 0)
+    ex = await conn.fetchrow("select * from expeditions where user_id=$1", uid)
+    v = CFG["vehicles"][veh["key"]]
+    L = ["🚜 ЭКСПЕДИЦИИ", f"Транспорт: {v['name']}",
+         f"⚙ {veh['engine']} · 📡 {veh['radar']} · 📦 {veh['cargo']} · 🛡 {veh['hull']}",
+         f"⛽ Топливо: {fuel}", f"📍 Локация: {loc_label(p['loc'])}", ""]
+    rows = []
+    if ex:
+        r = ROUTES[ex["route"]]
+        if ex["ready"] > now():
+            L.append(f"🚜 В пути: {r['name']} ({loc_label(ex['loc'])})\n⏱ Осталось: {fmt_t(ex['ready'] - now())}")
+            rows.append([("🔄 Обновить", mcd(uid, "exp"))])
+        else:
+            L.append("✅ Экспедиция вернулась! Забери добычу.")
+            rows.append([("📦 Забрать добычу", mcd(uid, "expclaim"))])
     else:
-        price = CFG["pots"][key]["price"]
-        if p["money"] < price:
-            return [(f"Не хватает денег: нужно {price} 💰. Горшок можно купить в магазине за ⭐.", None)]
-        await conn.execute("update players set money=money-$2 where user_id=$1", p["user_id"], price)
-    await conn.execute("update plots set pot=$4 where user_id=$1 and farm=$2 and slot=$3",
-                       p["user_id"], p["farm"], slot, key)
-    return [(f"🪴 В слоте {slot} теперь горшок «{key}» ({CFG['pots'][key]['liters']} л){paid}.", None)]
+        lvl = level_of(p["xp"])
+        for rk, r in ROUTES.items():
+            ok = lvl >= r["min_level"]
+            L.append(f"{'' if ok else '🔒 '}• {r['name']}: {fmt_t(exp_duration(p, veh, rk))}, ⛽{r['fuel']}, "
+                     f"~{exp_haul_n(veh, rk)} находок" + ("" if ok else f" (Lv.{r['min_level']})"))
+            if ok:
+                rows.append([(f"▶ {r['name']} · ⛽{r['fuel']}", mcd(uid, "expgo", rk))])
+        L.append("\nЛокацию экспедиции выбирай в разделе «Локации».")
+    rows += [[("🔧 Модули", mcd(uid, "expmod")), ("🚜 Транспорт", mcd(uid, "expveh"))],
+             [("⛽ Купить топливо", mcd(uid, "item", "топливо")), ("🏠 Меню", mcd(uid, "home"))]]
+    return pre + "\n".join(L), kb(rows)
 
 
-# ---------- VIP, бонус, Stars-магазин ----------
+async def mod_screen(conn, p, note=""):
+    uid = p["user_id"]
+    veh = await get_vehicle(conn, p)
+    back = [("⬅ Экспедиции", mcd(uid, "exp")), ("🏠 Меню", mcd(uid, "home"))]
+    if not veh:
+        return "Сначала купи транспорт.", kb([back])
+    money = await conn.fetchval("select money from players where user_id=$1", uid)
+    L = ([note, ""] if note else []) + [f"🔧 МОДУЛИ · {CFG['vehicles'][veh['key']]['name']}", f"💰 Баланс: {money}", ""]
+    rows = []
+    for mk, m in MODS.items():
+        lvl = veh[mk]
+        if lvl >= m["max"]:
+            L.append(f"{m['name']} · ур. {lvl}/{m['max']} (максимум)\n   {m['desc']}")
+        else:
+            price = mod_price(veh, mk)
+            L.append(f"{m['name']} · ур. {lvl}/{m['max']}\n   {m['desc']}\n   Следующий уровень: {price} 💰")
+            rows.append([(f"⬆ {m['name']} → {lvl + 1} · {price}💰", mcd(uid, "modup", mk))])
+    return "\n".join(L), kb(rows + [back])
+
+
+async def veh_screen(conn, p):
+    uid = p["user_id"]
+    rows_db = await conn.fetch("select key from vehicles where user_id=$1 order by key", uid)
+    btns = [(f"{'✅ ' if r['key'] == p['vehicle'] else ''}{CFG['vehicles'][r['key']]['name']}",
+             mcd(uid, "expsel", r["key"])) for r in rows_db]
+    rows = [[b] for b in btns] + [[("🛒 Купить транспорт", mcd(uid, "cat", "vehicles"))],
+                                  [("⬅ Экспедиции", mcd(uid, "exp")), ("🏠 Меню", mcd(uid, "home"))]]
+    return "🚜 ТРАНСПОРТ\nВыбери, на чём отправлять экспедиции (модули у каждого свои):", kb(rows)
+
+
+# ---------- VIP, бонус, донат ----------
 def vip_perks() -> str:
     v = VIP
-    return (f"+{int(v['yield_bonus'] * 100)}% к урожаю · +{int(v['xp_bonus'] * 100)}% к XP · "
-            f"+{int(v['sell_bonus'] * 100)}% к цене продажи · рост быстрее на {int(v['speed_bonus'] * 100)}% · "
+    return (f"перезарядка раскопки −{int(v['cooldown_cut'] * 100)}% · удача +{int(v['luck_bonus'] * 100)}% · "
+            f"+{int(v['xp_bonus'] * 100)}% к XP · +{int(v['sell_bonus'] * 100)}% к цене продажи · "
             f"ежедневный бонус ×{v['daily_mult']}")
+
+
+async def credit_stars(conn, uid, amount, reason) -> int:
+    new = await conn.fetchval("update players set stars=stars+$2 where user_id=$1 returning stars", uid, amount)
+    await conn.execute("insert into star_log(created,user_id,delta,reason) values($1,$2,$3,$4)",
+                       now(), uid, amount, reason)
+    return new
+
+
+async def spend_stars(conn, uid, amount, reason):
+    """Списывает ⭐ с игрового баланса. Вернёт остаток или None, если не хватает."""
+    new = await conn.fetchval(
+        "update players set stars=stars-$2 where user_id=$1 and stars>=$2 returning stars", uid, amount)
+    if new is None:
+        return None
+    await conn.execute("insert into star_log(created,user_id,delta,reason) values($1,$2,$3,$4)",
+                       now(), uid, -amount, reason)
+    return new
 
 
 async def cmd_vip(conn, p, a):
     head = ("👑 VIP активен" + vip_line(p).replace("\n👑 VIP", "")) if is_vip(p) else "👑 VIP не активен"
-    L = [head, "", "Бонусы: " + vip_perks(), "", "Купить:"]
+    bal = int(await conn.fetchval("select stars from players where user_id=$1", p["user_id"]) or 0)
+    L = [head, "", "Бонусы: " + vip_perks(), "", f"⭐ Твой баланс: {bal}", "Купить за звёзды:"]
     for k, pr in CFG["stars_products"].items():
         if "vip_days" in pr:
-            L.append(f"• {k} — {pr['title']}: ⭐{pr['stars']}")
+            L.append(f"• {pr['title']}: ⭐{pr['stars']}")
     L.append("\nВыбери срок кнопкой ниже. Повторная покупка продлевает срок.")
     return [("\n".join(L), None)]
 
 
 async def cmd_stars(conn, p, a):
-    if a and a[0] in CFG["stars_products"]:
-        inv = build_invoice(p, f"prod|{a[0]}")
+    if not a or a[0] not in CFG["stars_products"]:
+        return [("Выбери товар в разделе «Звёзды».", None)]
+    code = a[0]
+    pr = CFG["stars_products"][code]
+    if pr.get("credit"):                              # пополнение баланса: настоящий счёт Telegram Stars
+        inv = build_invoice(p, f"prod|{code}")
         return [inv] if isinstance(inv, dict) else [(inv, None)]
-    L = ["⭐ ЗВЁЗДЫ — VIP и донат", ""]
-    for k, pr in CFG["stars_products"].items():
-        L.append(f"• {k} — {pr['title']}: ⭐{pr['stars']}")
-    L += ["", "Счёт придёт в личку бота. Вопросы по платежам: /paysupport"]
-    return [("\n".join(L), None)]
+    left = await spend_stars(conn, p["user_id"], pr["stars"], f"товар: {pr['title']}")
+    if left is None:
+        bal = int(await conn.fetchval("select stars from players where user_id=$1", p["user_id"]) or 0)
+        return [(f"⭐ Не хватает звёзд: нужно {pr['stars']}, у тебя {bal}. Пополни баланс кнопками выше.", None)]
+    row = await conn.fetchrow("select * from players where user_id=$1", p["user_id"])
+    text = await apply_product(conn, row, code, "✅ Куплено за ⭐: ")
+    return [(f"{text}\n⭐ Остаток: {left}", None)]
 
 
 async def cmd_bonus(conn, p, a):
@@ -724,54 +1154,77 @@ async def cmd_bonus(conn, p, a):
         amount *= VIP["daily_mult"]
     await conn.execute("update players set money=money+$2, last_bonus=$3 where user_id=$1",
                        p["user_id"], amount, today())
-    return [(f"🎁 Ежедневный бонус: +{amount} 💰" + (" (VIP ×" + str(VIP["daily_mult"]) + ")" if is_vip(p) else ""), None)]
+    return [(f"🎁 Ежедневный бонус: +{amount} 💰" + (f" (VIP ×{VIP['daily_mult']})" if is_vip(p) else ""), None)]
 
 
-async def fulfil(conn, p, spec: str) -> str:
-    parts = spec.split("|")
+async def apply_product(conn, p, code, header) -> str:
+    pr = CFG["stars_products"][code]
     uid = p["user_id"]
-    if parts[0] == "buy":
-        it = resolve_item(parts[1], int(parts[2]))
-        note = await deliver_item(conn, uid, it)
-        return f"✅ Оплата получена: {it['label']}{note}"
-    pr = CFG["stars_products"][parts[1]]
-    L = [f"✅ Оплата получена: {pr['title']}"]
+    L = [f"{header}{pr['title']}"]
+    if pr.get("credit"):
+        new = await credit_stars(conn, uid, pr["credit"], "пополнение через Telegram Stars")
+        L.append(f"⭐ Баланс: {new}")
     if "vip_days" in pr:
         cur = max(now(), p["vip_until"])
-        new = cur + pr["vip_days"] * 86400
-        await conn.execute("update players set vip_until=$2 where user_id=$1", uid, new)
-        L.append("👑 VIP до " + time.strftime("%d.%m.%Y", time.gmtime(new)))
+        new_v = cur + pr["vip_days"] * 86400
+        await conn.execute("update players set vip_until=$2 where user_id=$1", uid, new_v)
+        L.append("👑 VIP до " + time.strftime("%d.%m.%Y", time.gmtime(new_v)))
     if "money" in pr:
         await conn.execute("update players set money=money+$2 where user_id=$1", uid, pr["money"])
         L.append(f"💰 +{pr['money']}")
     if "item" in pr:
-        await add_item(conn, uid, pr["item"], pr["qty"])
+        kind, key = pr["item"].split(":", 1)
+        await deliver_item(conn, uid, dict(kind=kind, key=key, qty=pr["qty"]))
         L.append(f"📦 {item_name(pr['item'])} × {pr['qty']}")
     return "\n".join(L)
 
 
-async def cmd_sell(conn, p, a):
-    rows = await conn.fetch(
-        "select item, qty from inventory where user_id=$1 and item like 'crop:%'", p["user_id"])
-    if a:
-        rows = [r for r in rows if r["item"] == f"crop:{a[0]}"]
-    if not rows:
-        return [("Продавать нечего.", None)]
-    total, L = 0, ["💸 Продано:"]
-    for r in rows:
-        key = r["item"].split(":", 1)[1]
-        st = CFG["strains"][key]
-        gain = round(r["qty"] * st["price_g"] * (1 + VIP["sell_bonus"] if is_vip(p) else 1))
-        total += gain
-        await take_item(conn, p["user_id"], r["item"], r["qty"])
-        L.append(f"• {st['name']} {fmt_n(r['qty'])} г — {gain} 💰")
-    await conn.execute("update players set money=money+$2 where user_id=$1", p["user_id"], total)
-    await bump(conn, p, "sell_value", total)
-    L.append(f"\nИтого: +{total} 💰 (баланс {p['money'] + total})")
-    return [("\n".join(L), None)]
+async def fulfil(conn, p, spec: str) -> str:
+    parts = spec.split("|")
+    if parts[0] == "buy":
+        it = resolve_item(parts[1], int(parts[2]))
+        note = await deliver_item(conn, p["user_id"], it)
+        return f"✅ Оплата получена: {it['label']}{note}"
+    return await apply_product(conn, p, parts[1], "✅ Оплата получена: ")
 
 
+# ---------- тексты экранов ----------
+async def cmd_help(conn, p, a):
+    return [(
+        "⛏ КЛАДОИСКАТЕЛИ — как играть\n\n"
+        "• Напиши «Рыть» — копаешь на выбранной локации. Находки разной редкости, "
+        "перезарядка между раскопками зависит от лопаты.\n"
+        "• «Меню» — локации, снаряжение, находки, магазин, миссии и всё остальное кнопками.\n"
+        "• Находки продаются за монеты. На монеты покупаются лопаты (меньше перезарядка, больше удачи), "
+        "металлоискатели (удача, изнашиваются) и карты (расходник, повышают шанс редких находок).\n"
+        "• 🏺 «Коллекция»: редкие коллекционные находки выпадают дополнительно к обычной. Их можно хранить, "
+        "продавать, а за собранную коллекцию локации дают награду и +удачу.\n"
+        "• 🚜 «Экспедиции»: купи транспорт и топливо, отправь команду копать, пока ты занят, "
+        "и забери целую партию находок. Модули улучшают скорость, удачу, груз и защиту от потерь.\n"
+        "• 📦 «Сундуки» выпадают при раскопках и экспедициях. Для каждого сундука нужен свой ключ: "
+        "ключи покупаются за монеты или ⭐ и иногда находятся в сундуках. Шансы наград видно в карточке сундука.\n"
+        "• ⭐ «Звёзды» — игровой баланс. Пополняется через Telegram Stars, тратится на ключи, VIP и предметы.\n"
+        "• Чем выше уровень, тем больше локаций открывается и тем ценнее находки.", None)]
 
+
+async def cmd_profile(conn, p, a):
+    lvl = level_of(p["xp"])
+    return [(
+        f"👤 {p['name']}\n🏅 Уровень: {lvl} (XP {p['xp']}, до след.: {xp_left(p['xp'])})\n"
+        f"💰 Баланс: {p['money']} · ⭐ Звёзды: {p['stars']}{vip_line(p)}\n"
+        f"⛏ Раскопок всего: {p['digs']}\n"
+        + await profile_extra(conn, p) + "\n" + loadout_text(p), None)]
+
+
+async def profile_extra(conn, p) -> str:
+    uid = p["user_id"]
+    found = int(await conn.fetchval("select count(*) from relic_journal where user_id=$1", uid) or 0)
+    L = f"🏺 Коллекция: {found}/{len(RELICS)}\n"
+    veh = await get_vehicle(conn, p)
+    if veh:
+        fuel = int(await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, "fuel:топливо") or 0)
+        L += f"🚜 Транспорт: {CFG['vehicles'][veh['key']]['name']} · ⛽ {fuel}\n"
+    return L
 
 
 # ---------- Telegram ----------
@@ -794,52 +1247,28 @@ async def send(m: Message, text: str, img: str | None, markup=None):
             if f.exists():
                 path = f
                 break
-    raw = text[:1024] if path else text
+    head, tail = text, ""
+    if path and len(text) > 1024:                    # подпись к фото ограничена: остаток уйдёт вторым сообщением
+        cut_at = text.rfind("\n\n", 0, 1024)
+        if cut_at < 200:
+            cut_at = 1024
+        head, tail = text[:cut_at], text[cut_at:].lstrip("\n")
     for html_on in ([True, False] if EMOJI_RE else [False]):
-        body = decorate(raw) if html_on else raw
+        body = decorate(head) if html_on else head
         pm = "HTML" if html_on else None
+        mk = None if tail else markup
         try:
             if path:
-                await m.reply_photo(FSInputFile(path), caption=body, parse_mode=pm, reply_markup=markup)
+                await m.reply_photo(FSInputFile(path), caption=body, parse_mode=pm, reply_markup=mk)
             else:
-                await m.reply(body, parse_mode=pm, reply_markup=markup)
-            return
+                await m.reply(body, parse_mode=pm, reply_markup=mk)
+            break
         except TelegramBadRequest as e:
             if not html_on:
                 raise
             logging.warning("отправка с премиум-эмодзи не удалась, шлю обычным текстом: %s", e)
-
-
-SCREENS = {
-    "меню": "home", "menu": "home", "помощь": "help",
-    "ферма": "farm", "фермы": "farmsm", "магазин": "shop", "склад": "stock",
-    "профиль": "profile", "миссии": "missions", "бонус": "bonus", "журнал": "journal",
-    "вип": "vip", "донат": "donat", "звёзды": "donat", "звезды": "donat", "⭐": "donat",
-}
-
-
-async def on_text(m: Message):
-    """Текстом открываются только экраны с кнопками. Все действия делаются кнопками."""
-    if not m.from_user or m.from_user.is_bot or not m.text:
-        return
-    parts = m.text.strip().lower().split()
-    if not parts:
-        return
-    screen = SCREENS.get(parts[0])
-    if not screen:
-        return
-    n = flood_count(m.from_user.id)
-    if n > 10:
-        if n == 11:
-            await m.reply("🛑 Слишком быстро! Подожди пару секунд.")
-        return
-    async with LOCK, pool.acquire() as conn:
-        async with conn.transaction():
-            p = await get_player(conn, m)
-            if p["banned"]:
-                return
-            text, markup, invs, extras = await menu_screen(conn, p, screen, [])
-    await send(m, text, None, markup)
+    if tail:
+        await send(m, tail, None, markup)
 
 
 async def send_invoice(m: Message, inv: dict, uid: int | None = None):
@@ -859,6 +1288,50 @@ async def send_invoice(m: Message, inv: dict, uid: int | None = None):
     except TelegramBadRequest as e:
         logging.warning("invoice failed: %s", e)
         await m.reply("Не удалось создать счёт, попробуй позже.")
+
+
+SCREENS = {
+    "меню": "home", "menu": "home", "помощь": "help",
+    "локации": "loc", "локация": "loc", "снаряжение": "gear", "находки": "stock",
+    "сумка": "stock", "улов": "stock", "склад": "stock", "магазин": "shop",
+    "сундуки": "chests", "сундук": "chests", "ключи": "chests", "коллекция": "rel", "реликвии": "rel", "экспедиции": "exp", "экспедиция": "exp", "рейс": "exp",
+    "профиль": "profile", "миссии": "missions", "бонус": "bonus", "журнал": "journal",
+    "вип": "vip", "донат": "donat", "звёзды": "donat", "звезды": "donat", "⭐": "donat",
+}
+DIG_WORDS = {"рыть", "копать", "копай", "раскопки", "dig"}
+
+
+async def on_text(m: Message):
+    """«Рыть» копает прямо в чате, остальные слова открывают экраны с кнопками."""
+    if not m.from_user or m.from_user.is_bot or not m.text:
+        return
+    parts = m.text.strip().lower().split()
+    if not parts:
+        return
+    word = parts[0]
+    is_dig = word in DIG_WORDS
+    screen = SCREENS.get(word)
+    if not is_dig and not screen:
+        return
+    n = flood_count(m.from_user.id)
+    if n > 10:
+        if n == 11:
+            await m.reply("🛑 Слишком быстро! Подожди пару секунд.")
+        return
+    async with LOCK, pool.acquire() as conn:
+        async with conn.transaction():
+            p = await get_player(conn, m)
+            if p["banned"]:
+                return
+            if is_dig:
+                out = await do_dig(conn, p)
+            else:
+                text, markup, invs, extras = await menu_screen(conn, p, screen, [])
+    if is_dig:
+        for t, img in out:
+            await send(m, t, img)
+    else:
+        await send(m, text, None, markup)
 
 
 # ---------- платежи Telegram Stars ----------
@@ -932,7 +1405,7 @@ async def on_paysupport(m: Message):
 
 async def on_terms(m: Message):
     await m.reply("📄 Условия: все покупки за ⭐ — виртуальные предметы внутри игры, "
-                  "не имеют денежной стоимости и не обмениваются на деньги. Игра вымышленная. "
+                  "не имеют денежной стоимости и не обмениваются на деньги. ⭐ звёзды в игре — внутренняя валюта: пополняется через Telegram Stars 1 к 1 и не выводится. Содержимое сундуков случайное, шансы показаны в игре. Игра вымышленная. "
                   "Возврат — через /paysupport. Мошенничество и абьюз ведут к блокировке.")
 
 
@@ -965,10 +1438,20 @@ async def on_refund(m: Message, command: CommandObject):
             await m.reply(f"Не удалось вернуть ⭐: {e}")
             return
         await conn.execute("update payments set refunded=true where charge_id=$1", charge)
-    await m.reply("✅ ⭐ возвращены. Выданное в игре (VIP, монеты, предметы) при необходимости отними вручную.")
+        note = ""
+        parts = (r["payload"] or "").split("|")
+        if len(parts) == 3 and parts[1] == "prod":
+            pr = CFG["stars_products"].get(parts[2])
+            if pr and pr.get("credit"):
+                new = await conn.fetchval(
+                    "update players set stars=stars-$2 where user_id=$1 returning stars", r["user_id"], pr["credit"])
+                await conn.execute("insert into star_log(created,user_id,delta,reason) values($1,$2,$3,$4)",
+                                   now(), r["user_id"], -pr["credit"], f"возврат платежа {charge}")
+                note = f"\nИгровой баланс ⭐ уменьшен на {pr['credit']} (сейчас {new})."
+    await m.reply("✅ ⭐ возвращены." + note + "\nДругое выданное в игре (VIP, монеты, предметы) при необходимости отними вручную.")
 
 
-# ---------- кнопочное меню игрока ----------
+# ---------- кнопочное меню ----------
 def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
 
@@ -990,24 +1473,22 @@ def chunk(btns, n=2):
     return [btns[i:i + n] for i in range(0, len(btns), n)]
 
 
-CAT_TITLES = {"strains": "🌱 Семена", "ferts": "🧪 Удобрения", "lights": "💡 Свет",
-              "accs": "🔧 Аксессуары", "cans": "🚿 Полив", "pots": "🪴 Горшки"}
-CAT_OF = {key: cat for cat, _, _ in CATS for key in CFG[cat]}
-
-
 def home_text(p) -> str:
-    return (f"🌿 ГРОУФЕРМА{' 👑' if is_vip(p) else ''}\n"
-            f"👤 {p['name']} · ⭐ Lv.{level_of(p['xp'])} · 💰 {p['money']}\n"
-            f"📍 {farm_label(p['farm'])}\n\nВыбери раздел:")
+    return (f"⛏ КЛАДОИСКАТЕЛИ{' 👑' if is_vip(p) else ''}\n"
+            f"👤 {p['name']} · 🏅 Lv.{level_of(p['xp'])} · 💰 {p['money']} · ⭐ {p['stars']}\n"
+            f"📍 {loc_label(p['loc'])}\n\nВыбери раздел (а копать можно командой «Рыть» в чате):")
 
 
 def kb_home(uid: int):
     rows = [
-        [("🏡 Ферма", mcd(uid, "farm")), ("🛒 Магазин", mcd(uid, "shop"))],
-        [("📦 Склад", mcd(uid, "stock")), ("🎯 Миссии", mcd(uid, "missions"))],
-        [("👤 Профиль", mcd(uid, "profile")), ("📖 Журнал", mcd(uid, "journal"))],
+        [("⛏ Рыть", mcd(uid, "dig"))],
+        [("📍 Локации", mcd(uid, "loc")), ("🎒 Снаряжение", mcd(uid, "gear"))],
+        [("💎 Находки", mcd(uid, "stock")), ("🏺 Коллекция", mcd(uid, "rel"))],
+        [("📦 Сундуки", mcd(uid, "chests")), ("🚜 Экспедиции", mcd(uid, "exp"))],
+        [("🛒 Магазин", mcd(uid, "shop")), ("🎯 Миссии", mcd(uid, "missions"))],
+        [("📖 Журнал", mcd(uid, "journal")), ("👤 Профиль", mcd(uid, "profile"))],
         [("🎁 Бонус", mcd(uid, "bonus")), ("👑 VIP", mcd(uid, "vip"))],
-        [("⭐ Донат", mcd(uid, "donat")), ("❓ Помощь", mcd(uid, "help"))],
+        [("⭐ Звёзды", mcd(uid, "donat")), ("❓ Помощь", mcd(uid, "help"))],
     ]
     if is_admin(uid):
         rows.append([("🛠 Админ-панель", acd(uid, "home"))])
@@ -1018,18 +1499,6 @@ def kb_back(uid: int):
     return kb([[("🏠 Меню", mcd(uid, "home"))]])
 
 
-def kb_farm(uid: int, has_dead: bool = False):
-    rows = [
-        [("💧 Полить", mcd(uid, "water")), ("✂️ Собрать", mcd(uid, "harvest"))],
-        [("🌱 Посадить", mcd(uid, "plantm")), ("🧪 Удобрить", mcd(uid, "fertm"))],
-        [("🪴 Горшки", mcd(uid, "potm")), ("🏘 Фермы", mcd(uid, "farmsm"))],
-    ]
-    if has_dead:
-        rows.append([("🧹 Убрать засохшие", mcd(uid, "clearall"))])
-    rows.append([("🔄 Обновить", mcd(uid, "farm")), ("🏠 Меню", mcd(uid, "home"))])
-    return kb(rows)
-
-
 def out_text(out) -> str:
     texts = [x[0] for x in out if isinstance(x, tuple)]
     if not texts and any(isinstance(x, dict) for x in out):
@@ -1037,55 +1506,24 @@ def out_text(out) -> str:
     return ("\n\n".join(texts) or "Готово.")[:3900]
 
 
-async def farm_screen(conn, p, note=""):
-    out = await cmd_farm(conn, p, [])
-    plots = await get_plots(conn, p)
-    dead = any(state(x) == "dead" for x in plots)
-    text = (note + "\n\n" if note else "") + out[0][0]
-    return text, kb_farm(p["user_id"], dead)
-
-
-async def plant_all(conn, p, key):
-    done, last = 0, ""
-    for _ in range(CFG["farms"][p["farm"]]["slots"]):
-        t = (await cmd_plant(conn, p, [key]))[0][0]
-        if t.startswith("🌱 Посажено"):
-            done += 1
-        else:
-            last = t
-            break
-    if done:
-        return f"🌱 Посажено: {CFG['strains'][key]['name']} × {done}"
-    return last
-
-
-async def fert_all(conn, p, key):
-    done = 0
-    for _ in range(CFG["farms"][p["farm"]]["slots"]):
-        t = (await cmd_fert(conn, p, [key]))[0][0]
-        if t.startswith("🧪"):
-            done += 1
-        else:
-            break
-    return (f"🧪 Удобрено растений: {done}" if done
-            else "Нет подходящих растений или закончились удобрения.")
-
-
 def item_lines(cat, s_):
-    if cat == "strains":
-        where = ", ".join(farm_label(f) for f in s_["farms"])
-        return [f"⏱ Растёт {s_['grow_min']} мин · полив каждые {s_['water_every_min']} мин",
-                f"⚖️ Урожай ~{s_['yield_g']} г · продажа {s_['price_g']} 💰/г",
-                f"📍 Растёт на: {where}"]
-    if cat == "ferts":
-        return [f"+{int(s_['bonus'] * 100)}% к урожаю растения"]
-    if cat == "lights":
-        return [f"Рост быстрее в ×{s_['mult']} · нужен Lv.{s_['min_level']}"]
-    if cat == "accs":
-        return [f"+{int(s_['bonus'] * 100)}% к урожаю · прочность {s_['durability']} сборов · Lv.{s_['min_level']}"]
-    if cat == "cans":
-        return [f"Поливает слотов за раз: {s_['slots']}"]
-    return [f"Объём {s_['liters']} л · урожай ×{s_['yield_mult']}"]
+    if cat == "tools":
+        return [f"⏱ Перезарядка раскопки: {s_['cooldown_min']} мин",
+                f"🍀 Удача (шанс редких находок): ×{s_['luck']} · нужен Lv.{s_['min_level']}"]
+    if cat == "dets":
+        return [f"🍀 Удача: +{int(s_['luck'] * 100)}% · прочность {s_['durability']} раскопок · Lv.{s_['min_level']}",
+                "Запасной детектор заменит сломанный сам"]
+    if cat == "vehicles":
+        return [f"Команда копает за тебя, пока ты занят: ~{s_['haul']} находок за обычную экспедицию",
+                f"⏱ Скорость ×{round(1 / s_['time_mult'], 2)} · нужен Lv.{s_['min_level']}",
+                "У каждого транспорта свои модули"]
+    if cat == "fuels":
+        return ["Тратится при старте экспедиции: обычная ⛽1, дальняя ⛽3"]
+    if cat == "keys":
+        c = CH[s_["chest"]]
+        return [f"Открывает: {c['emoji']} {c['name']}", "Один ключ тратится на один сундук"]
+    return [f"🍀 Шанс редких находок: ×{s_['luck']} · цена находки ×{s_['value']}",
+            "Тратится по одной карте за раскопку"]
 
 
 async def cat_screen(conn, uid, cat):
@@ -1096,9 +1534,8 @@ async def cat_screen(conn, uid, cat):
         it = resolve_item(key)
         if not it:
             continue
-        name = s_.get("name", f"Горшок «{key}»")
         lock = "🔒 " if lvl < it["need"] else ""
-        rows.append([(f"{lock}{name} · {it['price']}💰 · ⭐{it['stars']}", mcd(uid, "item", key))])
+        rows.append([(f"{lock}{s_['name']} · {it['price']}💰 · ⭐{it['stars']}", mcd(uid, "item", key))])
     rows.append([("⬅ Разделы", mcd(uid, "shop")), ("🏠 Меню", mcd(uid, "home"))])
     return f"{CAT_TITLES[cat]}\n💰 Баланс: {p['money']}\nВыбери товар:", kb(rows)
 
@@ -1108,46 +1545,107 @@ async def item_screen(conn, uid, key, note=""):
     s_ = CFG[cat][key]
     it = resolve_item(key)
     p = await conn.fetchrow("select * from players where user_id=$1", uid)
-    name = s_.get("name", f"Горшок «{key}»")
-    unit_price = it["price"] // it["qty"]
-    unit_stars_ = it["stars"] // it["qty"]
-    L = ([note, ""] if note else []) + [f"{CAT_TITLES[cat]} · {name}", *item_lines(cat, s_), "",
-         f"Цена: {unit_price} 💰 или ⭐{unit_stars_}", f"💰 Твой баланс: {p['money']}"]
+    L = ([note, ""] if note else []) + [f"{CAT_TITLES[cat]} · {s_['name']}", *item_lines(cat, s_), "",
+         f"Цена: {it['price']} 💰 или ⭐{it['stars']}", f"💰 Твой баланс: {p['money']} · ⭐ {p['stars']}"]
     back = [("⬅ Раздел", mcd(uid, "cat", cat)), ("🏠 Меню", mcd(uid, "home"))]
-    if level_of(p["xp"]) < it["need"]:
-        L.append(f"\n🔒 Доступно с {it['need']} уровня")
+    err = await check_buy(conn, p, it)
+    if err:
+        L.append("\n" + err)
         return "\n".join(L), kb([back])
-    if it["kind"] in ("seed", "fert"):
+    if it["kind"] in ("bait", "fuel", "key"):
         rows = [[(f"💰 ×{q}", mcd(uid, "buy", key, "m", q)) for q in (1, 5, 10)],
                 [(f"⭐ ×{q}", mcd(uid, "buy", key, "s", q)) for q in (1, 5, 10)]]
     else:
         rows = [[("💰 Купить", mcd(uid, "buy", key, "m", 1)), ("⭐ Купить", mcd(uid, "buy", key, "s", 1))]]
-    return "\n".join(L), kb(rows + [back])
+    return "\n".join(L), kb(rows + [[("➕ Пополнить ⭐", mcd(uid, "donat"))], back])
 
 
 async def stock_screen(conn, p, note=""):
     uid = p["user_id"]
-    out = await cmd_stock(conn, p, [])
-    crops = await conn.fetch(
-        "select item, qty from inventory where user_id=$1 and item like 'crop:%' order by item", uid)
-    btns = [(f"💸 {CFG['strains'][r['item'].split(':', 1)[1]]['name']} {fmt_n(r['qty'])} г",
-             mcd(uid, "sell", r["item"].split(":", 1)[1])) for r in crops]
-    rows = chunk(btns)
-    if crops:
-        rows.append([("💸 Продать всё", mcd(uid, "sell", "all"))])
+    rows_db = await conn.fetch(
+        "select item, qty from inventory where user_id=$1 and item like 'find:%'", uid)
+    items = sorted(((FINDS[r["item"].split(":", 1)[1]], r["qty"]) for r in rows_db),
+                   key=lambda x: (-x[0]["r"], x[0]["name"]))
+    L = ["💎 НАХОДКИ"]
+    if not items:
+        L.append("Пока пусто. Напиши «Рыть» в чате!")
+    total = 0
+    for i, (f, qty) in enumerate(items):
+        val = round(qty * f["ppk"])
+        total += val
+        if i < 40:
+            L.append(f"{f['emoji']} {f['name']} · {RARITY[f['r']].split(' ')[0]} · {qty:.2f} кг · ≈{val} 💰")
+    if len(items) > 40:
+        L.append(f"…и ещё {len(items) - 40}")
+    if items:
+        L.append(f"\nВсего ≈ {total} 💰")
+    rows = []
+    if items:
+        rows += [[("💸 Продать всё", mcd(uid, "sell", "all"))],
+                 [("💸 Мусор и обычные", mcd(uid, "sell", "low")), ("💸 Всё, кроме 🟠", mcd(uid, "sell", "nolegend"))]]
+        top = [x for x in items if x[0]["r"] >= 3][:6]
+        rows += chunk([(f"💸 {f['emoji']} {f['name']}", mcd(uid, "sell", f["key"])) for f, _ in top])
     rows.append([("🏠 Меню", mcd(uid, "home"))])
-    return (note + "\n\n" if note else "") + out[0][0], kb(rows)
+    return (note + "\n\n" if note else "") + "\n".join(L), kb(rows)
 
 
 async def missions_screen(conn, p, note=""):
     uid = p["user_id"]
-    out = await cmd_missions(conn, p, [])
     rows_db = await ensure_missions(conn, p)
+    L = ["🎯 МИССИИ НА СЕГОДНЯ", ""]
+    for r, tag in zip(rows_db, ["Лёгкая", "Средняя", "Сложная"]):
+        if r["claimed"]:
+            st = "✅ получено"
+        elif r["progress"] >= r["goal"]:
+            st = "🎁 готово, жми «Забрать награды»"
+        else:
+            st = f"{fmt_n(r['progress'])}/{r['goal']}"
+        L.append(f"{tag}: {r['text']}\n    {st} · награда {r['reward']} 💰")
+    L.append("\nОбновление каждый день (по UTC).")
     rows = []
     if any(r["progress"] >= r["goal"] and not r["claimed"] for r in rows_db):
         rows.append([("🎁 Забрать награды", mcd(uid, "claim"))])
     rows.append([("🏠 Меню", mcd(uid, "home"))])
-    return (note + "\n\n" if note else "") + out[0][0], kb(rows)
+    return (note + "\n\n" if note else "") + "\n".join(L), kb(rows)
+
+
+async def claim_missions(conn, p) -> str:
+    rows_db = await ensure_missions(conn, p)
+    ready = [r for r in rows_db if r["progress"] >= r["goal"] and not r["claimed"]]
+    if not ready:
+        return "Готовых наград пока нет."
+    total = sum(r["reward"] for r in ready)
+    for r in ready:
+        await conn.execute("update dig_missions set claimed=true where user_id=$1 and day=$2 and idx=$3",
+                           p["user_id"], today(), r["idx"])
+    await conn.execute("update players set money=money+$2 where user_id=$1", p["user_id"], total)
+    return f"🎁 Награды за миссии: +{total} 💰"
+
+
+async def journal_screen(conn, p, loc_key=None):
+    uid = p["user_id"]
+    jr = {r["item"]: r for r in await conn.fetch("select * from dig_journal where user_id=$1", uid)}
+    if loc_key is None:
+        L = ["📖 ЖУРНАЛ КЛАДОИСКАТЕЛЯ (коллекция находок)", ""]
+        btns = []
+        total_f = total_d = 0
+        for lk, loc in CFG["locations"].items():
+            got = sum(1 for i in range(len(loc["finds"])) if f"{lk}{i}" in jr)
+            total_f += len(loc["finds"])
+            total_d += got
+            L.append(f"{loc['emoji']} {loc['name']}: {got}/{len(loc['finds'])}")
+            btns.append((f"{loc['emoji']} {loc['name']}", mcd(uid, "jloc", lk)))
+        L.append(f"\nВсего найдено: {total_d}/{total_f} · раскопок: {p['digs']}")
+        return "\n".join(L), kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]])
+    loc = CFG["locations"][loc_key]
+    L = [f"📖 {loc['emoji']} {loc['name']}", ""]
+    for i, f in enumerate(loc["finds"]):
+        r = jr.get(f"{loc_key}{i}")
+        if r:
+            L.append(f"{f['emoji']} {f['name']} · {RARITY[f['r']].split(' ')[0]} · найдено {r['cnt']} · рекорд {r['best_kg']:.3f} кг")
+        else:
+            L.append(f"❔ ??? · {RARITY[f['r']].split(' ')[0]}")
+    return "\n".join(L), kb([[("⬅ Журнал", mcd(uid, "journal")), ("🏠 Меню", mcd(uid, "home"))]])
 
 
 async def menu_screen(conn, p, action, args):
@@ -1168,141 +1666,51 @@ async def menu_screen(conn, p, action, args):
         return ret(home_text(p), kb_home(uid))
     if action == "help":
         return ret((await cmd_help(conn, p, []))[0][0], kb_back(uid))
+    if action == "dig":
+        extras.extend(await do_dig(conn, p))
+        extras[:] = [(f"👤 {p['name']}\n{t}" if t.startswith(("⛏", "⏳")) else t, img) for t, img in extras]
+        return ret(home_text(p), kb_home(uid))
 
-    # ----- ферма -----
-    if action == "farm":
-        return ret(*await farm_screen(conn, p))
-    if action == "water":
-        return ret(*await farm_screen(conn, p, await run(cmd_water)))
-    if action == "harvest":
-        out = await cmd_harvest(conn, p, [])
-        got = [x for x in out if x[0].startswith("🌿 Сбор урожая")]
-        if got:
-            for t, img in out:
-                extras.append((f"👤 {p['name']}\n{t}" if t.startswith("🌿") else t, img))
-            note = f"✂️ Собрано растений: {len(got)}"
-        else:
-            note = out_text(out)
-        return ret(*await farm_screen(conn, p, note))
-    if action == "clearall":
-        plots = await get_plots(conn, p)
-        n = 0
-        for pl in plots:
-            if state(pl) == "dead":
-                await cmd_clear(conn, p, [str(pl["slot"])])
-                n += 1
-        return ret(*await farm_screen(conn, p, f"🧹 Убрано засохших: {n}" if n else "Засохших растений нет."))
-    if action == "farmsm":
-        btns = [(f"{'🔒' if lvl < f['min_level'] else f['emoji']} {f['name']} · Lv.{f['min_level']}",
-                 mcd(uid, "farmgo", k)) for k, f in CFG["farms"].items()]
-        rows = chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]
-        return ret(f"🏘 Выбери ферму (сейчас: {farm_label(p['farm'])}):", kb(rows))
-    if action == "farmgo":
-        f = CFG["farms"][args[0]]
-        if lvl < f["min_level"]:
-            return ret(f"🔒 {f['name']} открывается с {f['min_level']} уровня.",
-                       kb([[("⬅ Фермы", mcd(uid, "farmsm"))]]))
-        await conn.execute("update players set farm=$2 where user_id=$1", uid, args[0])
+    # ----- локации и снаряжение -----
+    if action == "loc":
+        btns = [(f"{'✅' if k == p['loc'] else ('🔒' if lvl < l['min_level'] else l['emoji'])} {l['name']} · Lv.{l['min_level']}",
+                 mcd(uid, "locgo", k)) for k, l in CFG["locations"].items()]
+        cur = CFG["locations"][p["loc"]]
+        return ret(f"📍 ЛОКАЦИИ\nСейчас: {loc_label(p['loc'])}\n{cur['desc']}\nВыбери, где копать:",
+                   kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]))
+    if action == "locgo":
+        loc = CFG["locations"][args[0]]
+        if lvl < loc["min_level"]:
+            return ret(f"🔒 {loc['name']} открывается с {loc['min_level']} уровня.", kb([[("⬅ Локации", mcd(uid, "loc"))]]))
+        await conn.execute("update players set loc=$2 where user_id=$1", uid, args[0])
         p2 = await conn.fetchrow("select * from players where user_id=$1", uid)
-        return ret(*await farm_screen(conn, p2, f"📍 Ты на ферме: {farm_label(args[0])}"))
-
-    # ----- посадка -----
-    if action == "plantm":
+        return ret(f"📍 Ты на локации: {loc['emoji']} {loc['name']}\n{loc['desc']}\n\nКопай командой «Рыть» в чате.",
+                   kb([[("⛏ Рыть", mcd(uid, "dig"))], [("🎒 Снаряжение", mcd(uid, "gear")), ("🏠 Меню", mcd(uid, "home"))]]))
+    if action == "gear":
+        left = None
+        if p["bait"]:
+            left = await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, f"bait:{p['bait']}") or 0
+        text = "🎒 СНАРЯЖЕНИЕ\n" + loadout_text(p, left) + f"\n⏱ Перезарядка: {fmt_t(cooldown_sec(p))}"
+        return ret(text, kb([[("📍 Локация", mcd(uid, "loc")), ("🗺 Выбрать карту", mcd(uid, "baitm"))],
+                             [("🛒 Купить снаряжение", mcd(uid, "shop")), ("🏠 Меню", mcd(uid, "home"))]]))
+    if action == "baitm":
         rows_db = await conn.fetch(
-            "select item, qty from inventory where user_id=$1 and item like 'seed:%' order by item", uid)
-        btns = []
-        for r in rows_db:
-            key = r["item"].split(":", 1)[1]
-            st = CFG["strains"][key]
-            ok = p["farm"] in st["farms"]
-            btns.append((f"{'🌱' if ok else '🚫'} {st['name']} ×{fmt_n(r['qty'])}", mcd(uid, "plantk", key)))
-        if not btns:
-            return ret("🌱 ПОСАДКА\nУ тебя нет семян. Купи их в магазине.",
-                       kb([[("🛒 Купить семена", mcd(uid, "cat", "strains"))], [("⬅ Ферма", mcd(uid, "farm"))]]))
-        return ret(f"🌱 ПОСАДКА · {farm_label(p['farm'])}\nВыбери семена (🚫 — не растут на этой ферме):",
-                   kb(chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]))
-    if action == "plantk":
-        key = args[0]
-        st = CFG["strains"][key]
-        have = await conn.fetchval("select qty from inventory where user_id=$1 and item=$2", uid, f"seed:{key}")
-        back = [("⬅ Семена", mcd(uid, "plantm"))]
-        if not have:
-            return ret("Семян не осталось.", kb([back]))
-        if p["farm"] not in st["farms"]:
-            where = ", ".join(farm_label(f) for f in st["farms"])
-            return ret(f"🚫 {st['name']} не растёт на ферме «{CFG['farms'][p['farm']]['name']}».\nПодходит: {where}",
-                       kb([back]))
-        plots = await get_plots(conn, p)
-        free = [x for x in plots if not x["strain"]]
-        if not free:
-            return ret("Свободных слотов нет. Собери урожай или убери засохшее.", kb([back]))
-        speed = CFG["lights"][p["light"]]["mult"] * (1 + VIP["speed_bonus"] if is_vip(p) else 1)
-        btns = [(f"Слот {x['slot']} · {CFG['pots'][x['pot']]['liters']} л", mcd(uid, "plants", key, x["slot"]))
-                for x in free]
-        rows = chunk(btns, 3) + [[("🌱 Во все свободные", mcd(uid, "plants", key, "all"))], back]
-        return ret(f"🌱 {st['name']} · семян: {fmt_n(have)}\n⏱ Созреет за {fmt_t(st['grow_min'] * 60 / speed)}\n"
-                   f"💧 Полив каждые {st['water_every_min']} мин\nКуда сажаем?", kb(rows))
-    if action == "plants":
-        key, slot = args[0], args[1]
-        note = await plant_all(conn, p, key) if slot == "all" else await run(cmd_plant, [key, slot])
-        return ret(*await farm_screen(conn, p, note))
-
-    # ----- удобрения -----
-    if action == "fertm":
-        rows_db = await conn.fetch(
-            "select item, qty from inventory where user_id=$1 and item like 'fert:%' order by item", uid)
-        btns = [(f"🧪 {CFG['ferts'][r['item'].split(':', 1)[1]]['name']} ×{fmt_n(r['qty'])}",
-                 mcd(uid, "fertk", r["item"].split(":", 1)[1])) for r in rows_db]
-        if not btns:
-            return ret("🧪 УДОБРЕНИЯ\nУдобрений нет. Купи их в магазине.",
-                       kb([[("🛒 Купить удобрения", mcd(uid, "cat", "ferts"))], [("⬅ Ферма", mcd(uid, "farm"))]]))
-        return ret("🧪 УДОБРЕНИЯ\nВыбери удобрение:", kb(chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]))
-    if action == "fertk":
-        key = args[0]
-        plots = await get_plots(conn, p)
-        cand = [x for x in plots if state(x) == "grow" and not x["fert"]]
-        back = [("⬅ Удобрения", mcd(uid, "fertm"))]
-        if not cand:
-            return ret("Нет растущих растений без удобрения.", kb([back]))
-        btns = [(f"Слот {x['slot']} · {CFG['strains'][x['strain']]['name']}", mcd(uid, "ferts", key, x["slot"]))
-                for x in cand]
-        rows = chunk(btns) + [[("🧪 Всем подходящим", mcd(uid, "ferts", key, "all"))], back]
-        f = CFG["ferts"][key]
-        return ret(f"🧪 {f['name']} (+{int(f['bonus'] * 100)}% урожая)\nКакое растение удобряем?", kb(rows))
-    if action == "ferts":
-        key, slot = args[0], args[1]
-        note = await fert_all(conn, p, key) if slot == "all" else await run(cmd_fert, [key, slot])
-        return ret(*await farm_screen(conn, p, note))
-
-    # ----- горшки -----
-    if action == "potm":
-        plots = await get_plots(conn, p)
-        free = [x for x in plots if not x["strain"]]
-        if not free:
-            return ret("Горшок можно менять только в пустом слоте.", kb([[("⬅ Ферма", mcd(uid, "farm"))]]))
-        btns = [(f"Слот {x['slot']} · {x['pot']} ({CFG['pots'][x['pot']]['liters']} л)", mcd(uid, "potk", x["slot"]))
-                for x in free]
-        return ret("🪴 ГОРШКИ\nВ каком слоте меняем горшок?", kb(chunk(btns) + [[("⬅ Ферма", mcd(uid, "farm"))]]))
-    if action == "potk":
-        slot = args[0]
-        inv = {r["item"]: r["qty"] for r in await conn.fetch(
-            "select item, qty from inventory where user_id=$1 and item like 'pot:%'", uid)}
-        btns = []
-        for k, pt in CFG["pots"].items():
-            have = inv.get(f"pot:{k}")
-            price = "со склада" if have else ("бесплатно" if not pt["price"] else f"{pt['price']}💰")
-            btns.append((f"{k} · {pt['liters']} л · ×{pt['yield_mult']} · {price}", mcd(uid, "potset", slot, k)))
-        rows = [[b] for b in btns] + [[("⬅ Горшки", mcd(uid, "potm"))]]
-        return ret(f"🪴 Слот {slot}: выбери горшок.\n💰 Баланс: {p['money']}\n"
-                   "Купить горшок за ⭐ можно в магазине (раздел «Горшки»).", kb(rows))
-    if action == "potset":
-        return ret(*await farm_screen(conn, p, await run(cmd_pot, [args[0], args[1]])))
+            "select item, qty from inventory where user_id=$1 and item like 'bait:%' order by item", uid)
+        btns = [(f"{'✅ ' if p['bait'] == r['item'][5:] else ''}🗺 {CFG['baits'][r['item'][5:]]['name']} ×{fmt_n(r['qty'])}",
+                 mcd(uid, "baitset", r["item"][5:])) for r in rows_db]
+        rows = chunk(btns) + [[("❌ Без карты", mcd(uid, "baitset", "none"))],
+                              [("🛒 Купить карты", mcd(uid, "cat", "baits")), ("⬅ Снаряжение", mcd(uid, "gear"))]]
+        return ret("🗺 Какую карту использовать при раскопках?\nКарта тратится по одной за раскопку и повышает шанс редких находок.", kb(rows))
+    if action == "baitset":
+        await conn.execute("update players set bait=$2 where user_id=$1", uid, None if args[0] == "none" else args[0])
+        p2 = await conn.fetchrow("select * from players where user_id=$1", uid)
+        return ret("🗺 Выбрано.\n\n" + loadout_text(p2), kb([[("⛏ Рыть", mcd(uid, "dig"))], [("🎒 Снаряжение", mcd(uid, "gear")), ("🏠 Меню", mcd(uid, "home"))]]))
 
     # ----- магазин -----
     if action == "shop":
         btns = [(t, mcd(uid, "cat", c)) for c, t in CAT_TITLES.items()]
         return ret(f"🛒 МАГАЗИН\n💰 Баланс: {p['money']}\nВыбери раздел:",
-                   kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]))
+                   kb(chunk(btns, 3) + [[("🏠 Меню", mcd(uid, "home"))]]))
     if action == "cat":
         return ret(*await cat_screen(conn, uid, args[0]))
     if action == "item":
@@ -1312,34 +1720,89 @@ async def menu_screen(conn, p, action, args):
         note = await run(cmd_buy, [key, qty] + (["звёзды"] if mode == "s" else []))
         return ret(*await item_screen(conn, uid, key, note))
 
+    # ----- сундуки -----
+    if action == "chests":
+        return ret(*await chests_screen(conn, p))
+    if action == "chopen":
+        return ret(*await chests_screen(conn, p, await chest_open(conn, p, args[0])))
+    if action == "chinfo":
+        return ret(*await chest_info_screen(conn, p, args[0]))
+
+    # ----- коллекция -----
+    if action == "rel":
+        return ret(*await rel_screen(conn, p))
+    if action == "reloc":
+        return ret(*await reloc_screen(conn, p, args[0]))
+    if action == "relic":
+        return ret(*await relic_screen(conn, p, args[0]))
+    if action == "relsell":
+        key, mode = args[0], args[1]
+        have = (await relic_counts(conn, uid)).get(key, 0)
+        n = {"1": 1, "dup": have - 1, "all": have}[mode]
+        if have and n >= have and not (len(args) > 2 and args[2] == "yes"):
+            r = RELICS[key]
+            return ret(f"⚠️ Продать последнюю копию?\n{r['emoji']} {r['name']} · {r['value']} 💰\n"
+                       "Она пропадёт из твоих запасов (запись в коллекции останется).",
+                       kb([[("✅ Да, продать", mcd(uid, "relsell", key, mode, "yes")),
+                            ("✖ Отмена", mcd(uid, "relic", key))]]))
+        note = await relic_sell(conn, p, key, mode)
+        return ret(*await reloc_screen(conn, p, RELICS[key]["loc"], note))
+    if action == "relset":
+        return ret(*await reloc_screen(conn, p, args[0], await relic_set_claim(conn, p, args[0])))
+
+    # ----- экспедиции -----
+    if action == "exp":
+        return ret(*await exp_screen(conn, p))
+    if action == "expgo":
+        return ret(*await exp_screen(conn, p, await exp_start(conn, p, args[0])))
+    if action == "expclaim":
+        out = await exp_claim(conn, p)
+        note = ""
+        if out[0][0].startswith("🚜 Экспедиция вернулась"):
+            extras.extend((f"👤 {p['name']}\n{t}" if t.startswith("🚜") else t, img) for t, img in out)
+        else:
+            note = out[0][0]
+        p2 = await conn.fetchrow("select * from players where user_id=$1", uid)
+        return ret(*await exp_screen(conn, p2, note or "📦 Добыча на складе: раздел «Находки»."))
+    if action == "expmod":
+        return ret(*await mod_screen(conn, p))
+    if action == "modup":
+        return ret(*await mod_screen(conn, p, await mod_upgrade(conn, p, args[0])))
+    if action == "expveh":
+        return ret(*await veh_screen(conn, p))
+    if action == "expsel":
+        await conn.execute("update players set vehicle=$2 where user_id=$1", uid, args[0])
+        p2 = await conn.fetchrow("select * from players where user_id=$1", uid)
+        return ret(*await exp_screen(conn, p2, "🚜 Транспорт выбран."))
+
     # ----- остальное -----
     if action == "stock":
         return ret(*await stock_screen(conn, p))
     if action == "sell":
-        note = await run(cmd_sell, [] if args[0] == "all" else [args[0]])
-        return ret(*await stock_screen(conn, p, note))
+        return ret(*await stock_screen(conn, p, await sell_items(conn, p, args[0])))
     if action == "missions":
         return ret(*await missions_screen(conn, p))
     if action == "claim":
-        return ret(*await missions_screen(conn, p, await run(cmd_claim)))
+        return ret(*await missions_screen(conn, p, await claim_missions(conn, p)))
+    if action == "journal":
+        return ret(*await journal_screen(conn, p))
+    if action == "jloc":
+        return ret(*await journal_screen(conn, p, args[0]))
     if action == "profile":
         return ret(await run(cmd_profile), kb_back(uid))
-    if action == "journal":
-        return ret(await run(cmd_journal), kb_back(uid))
     if action == "bonus":
         return ret(await run(cmd_bonus), kb_back(uid))
     if action == "vip":
         text = await run(cmd_vip)
         rows = [[(f"⭐ {pr['title']} — {pr['stars']}", mcd(uid, "prod", k))]
                 for k, pr in CFG["stars_products"].items() if "vip_days" in pr]
+        rows.append([("➕ Пополнить ⭐", mcd(uid, "donat"))])
         return ret(text, kb(rows + [[("🏠 Меню", mcd(uid, "home"))]]))
     if action == "donat":
-        btns = [(f"{pr['title']} — ⭐{pr['stars']}", mcd(uid, "prod", k))
-                for k, pr in CFG["stars_products"].items()]
-        return ret("⭐ ДОНАТ — выбери товар. Счёт придёт в личку бота.\nВопросы по платежам: /paysupport",
-                   kb(chunk(btns) + [[("🏠 Меню", mcd(uid, "home"))]]))
+        return ret(*await stars_screen(conn, p))
     if action == "prod":
-        return ret(await run(cmd_stars, [args[0]]), kb_back(uid))
+        note = await run(cmd_stars, [args[0]])
+        return ret(*await stars_screen(conn, p, note))
     return ret(home_text(p), kb_home(uid))
 
 
@@ -1372,7 +1835,7 @@ async def on_menu_cb(cb: CallbackQuery):
     parts = cb.data.split("|")
     owner = int(parts[1])
     if cb.from_user.id != owner:
-        await cb.answer("Это меню другого игрока. Напиши «Ферма» или «Меню», чтобы открыть своё.", show_alert=True)
+        await cb.answer("Это меню другого игрока. Напиши «Меню», чтобы открыть своё.", show_alert=True)
         return
     if flood_count(owner) > 14:
         await cb.answer("Не так быстро!")
@@ -1411,12 +1874,16 @@ async def log_admin(conn, admin, target, action):
 
 
 def admin_item(key: str, qty: int):
+    if key in CH:
+        q = max(1, min(qty, 1000))
+        return dict(kind="chest", key=key, qty=q, label=f"{CH[key]['emoji']} {CH[key]['name']} × {q}")
+    if key in RELICS:
+        return dict(kind="relic", key=key, qty=1, label=f"{RELICS[key]['emoji']} {RELICS[key]['name']}")
     for cat, kind, pf in CATS:
         s_ = CFG[cat].get(key)
         if s_:
-            q = max(1, min(qty, 1000)) if kind in ("seed", "fert") else 1
-            name = s_.get("name", f"горшок «{key}»")
-            return dict(kind=kind, key=key, qty=q, label=f"{name} × {q}")
+            q = max(1, min(qty, 1000)) if kind in ("bait", "fuel", "key") else 1
+            return dict(kind=kind, key=key, qty=q, label=f"{s_['name']} × {q}")
     return None
 
 
@@ -1425,6 +1892,13 @@ async def admin_apply(conn, admin, tgt, action, args) -> str:
         n = int(args[0])
         await conn.execute("update players set money=greatest(0, money+$2) where user_id=$1", tgt, n)
         note = f"💰 {n:+d}"
+    elif action == "stars":
+        n = int(args[0])
+        new = await conn.fetchval(
+            "update players set stars=greatest(0, stars+$2) where user_id=$1 returning stars", tgt, n)
+        await conn.execute("insert into star_log(created,user_id,delta,reason) values($1,$2,$3,$4)",
+                           now(), tgt, n, f"админ {admin}")
+        note = f"⭐ Звёзды {n:+d} (баланс {new})"
     elif action == "vip":
         days = int(args[0])
         cur = await conn.fetchval("select vip_until from players where user_id=$1", tgt)
@@ -1444,9 +1918,12 @@ async def admin_apply(conn, admin, tgt, action, args) -> str:
     elif action == "item":
         it = admin_item(args[0], int(args[1]))
         if not it:
-            return "❌ Такого предмета нет (ключи: дыня, золото, вентилятор, кадка, led …)"
+            return "❌ Такого предмета нет (ключи: карта1–3, k1–k5 ключи, c1–c5 сундуки, топливо, повозка, вездеход, экскаватор, стальная, титановая, алмазная, простой, профи, георадар, реликвии вида пляжr0)"
         await deliver_item(conn, tgt, it)
         note = f"📦 Выдано: {it['label']}"
+    elif action == "reset_cd":
+        await conn.execute("update players set last_dig=0 where user_id=$1", tgt)
+        note = "⏱ Перезарядка раскопки сброшена"
     elif action == "giftdo":
         row = await conn.fetchrow("select * from players where user_id=$1", tgt)
         text = await fulfil(conn, row, f"prod|{args[0]}")
@@ -1503,27 +1980,39 @@ async def admin_screen(conn, admin, action, args, note=""):
             L.append("Пока пусто.")
         return "\n".join(L)[:3900], kb([back])
 
-    if action in ("moneyc", "lvl", "item", "gift", "card", "money", "vip", "vipoff", "xp", "giftdo", "ban", "unban"):
+    if action in ("moneyc", "starsc", "slog", "stars", "lvl", "item", "gift", "card", "money", "vip", "vipoff",
+                  "xp", "giftdo", "ban", "unban", "reset_cd"):
         if not tgt:
             return "Сначала выбери игрока.", kb([[("👤 Выбрать игрока", acd(admin, "pick"))], back])
     if action == "moneyc":
         st["await"] = "money"
         return "💰 Пришли число монет (можно отрицательное, чтобы списать).", kb([[("✖ Отмена", acd(admin, "card"))]])
+    if action == "starsc":
+        st["await"] = "stars"
+        return ("⭐ Пришли число звёзд для начисления (можно отрицательное, чтобы списать). "
+                "Это игровая валюта, настоящие Telegram Stars так не создаются."), kb([[("✖ Отмена", acd(admin, "card"))]])
+    if action == "slog":
+        rows_db = await conn.fetch("select * from star_log where user_id=$1 order by id desc limit 12", tgt)
+        L = ["🧾 ⭐ ЖУРНАЛ ЗВЁЗД ИГРОКА", ""]
+        for r in rows_db:
+            L.append(f"{time.strftime('%d.%m %H:%M', time.gmtime(r['created']))} · {r['delta']:+d} · {r['reason']}")
+        if not rows_db:
+            L.append("Движений нет.")
+        return "\n".join(L), kb([[("⬅ Карточка", acd(admin, "card")), ("⬅ Админ", acd(admin, "home"))]])
     if action == "lvl" and not args:
         st["await"] = "lvl"
         return "🎚 Пришли номер уровня (1–500). Опыт будет установлен под этот уровень.", kb([[("✖ Отмена", acd(admin, "card"))]])
     if action == "item" and not args:
         st["await"] = "item"
-        return ("📦 Пришли: <ключ> [кол-во], например «золото 5» или «кадка».\n"
-                "Ключи: сорта, удобрения, свет, аксессуары, лейки, горшки (как в магазине)."), kb([[("✖ Отмена", acd(admin, "card"))]])
+        return ("📦 Пришли: <ключ> [кол-во], например «карта3 5» или «алмазная».\n"
+                "Ключи: карта1–3, k1–k5 (ключи), c1–c5 (сундуки), топливо, стальная, титановая, алмазная, простой, профи, георадар."), kb([[("✖ Отмена", acd(admin, "card"))]])
     if action == "gift":
-        btns = [(f"{pr['title']}", acd(admin, "giftdo", k)) for k, pr in CFG["stars_products"].items()]
+        btns = [(pr["title"], acd(admin, "giftdo", k)) for k, pr in CFG["stars_products"].items()]
         return ("🎁 Выдать игроку донат-пакет бесплатно (как после оплаты):",
                 kb(chunk(btns) + [[("⬅ Карточка", acd(admin, "card"))]]))
-    if action in ("money", "vip", "vipoff", "xp", "giftdo", "ban", "unban", "lvl", "item"):
+    if action in ("money", "stars", "vip", "vipoff", "xp", "giftdo", "ban", "unban", "lvl", "item", "reset_cd"):
         note = await admin_apply(conn, admin, tgt, action, args)
 
-    # карточка игрока
     st["await"] = None
     r = await conn.fetchrow("select * from players where user_id=$1", tgt)
     if not r:
@@ -1531,13 +2020,16 @@ async def admin_screen(conn, admin, action, args, note=""):
     vip = ("до " + time.strftime("%d.%m.%Y", time.gmtime(r["vip_until"]))) if r["vip_until"] > now() else "нет"
     text = ((note + "\n\n") if note else "") + (
         f"👤 {r['name']}" + (f" (@{r['username']})" if r["username"] else "") + f"\nID: {tgt}\n"
-        f"⭐ Lv.{level_of(r['xp'])} (XP {r['xp']}) · 💰 {r['money']}\n"
-        f"👑 VIP: {vip} · 📍 {farm_label(r['farm'])} · 🌾 {r['harvests']}"
+        f"🏅 Lv.{level_of(r['xp'])} (XP {r['xp']}) · 💰 {r['money']} · ⭐ {r['stars']}\n"
+        f"👑 VIP: {vip} · 📍 {loc_label(r['loc'])} · ⛏ {r['digs']}"
         + ("\n🚫 ЗАБЛОКИРОВАН" if r["banned"] else ""))
     rows = [
         [("💰 +1 000", acd(admin, "money", 1000)), ("💰 +10 000", acd(admin, "money", 10000)),
          ("💰 +100 000", acd(admin, "money", 100000))],
-        [("💰 Своё число", acd(admin, "moneyc"))],
+        [("💰 Своё число", acd(admin, "moneyc")), ("⏱ Сбросить перезарядку", acd(admin, "reset_cd"))],
+        [("⭐ +10", acd(admin, "stars", 10)), ("⭐ +50", acd(admin, "stars", 50)),
+         ("⭐ +100", acd(admin, "stars", 100)), ("⭐ +500", acd(admin, "stars", 500))],
+        [("⭐ Своё число", acd(admin, "starsc")), ("🧾 Журнал ⭐", acd(admin, "slog"))],
         [("👑 +7 дн", acd(admin, "vip", 7)), ("👑 +30 дн", acd(admin, "vip", 30)),
          ("👑 +90 дн", acd(admin, "vip", 90))],
         [("👑 Снять VIP", acd(admin, "vipoff"))],
@@ -1587,7 +2079,6 @@ async def on_admin_input(m: Message):
     text = (m.text or "").strip()
     async with LOCK, pool.acquire() as conn:
         async with conn.transaction():
-            note = ""
             if mode == "target":
                 uid = None
                 fo = getattr(m, "forward_origin", None)
@@ -1610,6 +2101,8 @@ async def on_admin_input(m: Message):
                 try:
                     if mode == "money":
                         res = await admin_apply(conn, admin, tgt, "money", [int(text)])
+                    elif mode == "stars":
+                        res = await admin_apply(conn, admin, tgt, "stars", [int(text)])
                     elif mode == "lvl":
                         res = await admin_apply(conn, admin, tgt, "lvl", [int(text)])
                     else:
@@ -1640,7 +2133,7 @@ async def main():
     global pool
     pool = await asyncpg.create_pool(DB_URL, min_size=1, max_size=5)
     async with pool.acquire() as c:
-        if os.environ.get("RESET_DB") == "1":     # ОСТОРОЖНО: стирает все данные
+        if os.environ.get("RESET_DB") == "1":     # ОСТОРОЖНО: стирает игроков и прогресс
             await c.execute(RESET)
         await c.execute(SCHEMA)
 
@@ -1660,7 +2153,6 @@ async def main():
     dp.message.register(on_paid, F.successful_payment)
     dp.pre_checkout_query.register(on_pre_checkout)
     dp.message.register(on_menu_cmd, Command("menu"))
-    dp.message.register(on_menu_cmd, F.text.lower().in_({"меню", "menu"}))
     dp.message.register(on_admin_cmd, Command("admin"))
     dp.message.register(on_admin_input, F.text, admin_waiting)
     dp.callback_query.register(on_menu_cb, F.data.startswith("m|"))
