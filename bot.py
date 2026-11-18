@@ -1191,8 +1191,8 @@ async def fulfil(conn, p, spec: str) -> str:
 # ---------- тексты экранов ----------
 async def cmd_help(conn, p, a):
     return [(
-        "⛏ КЛАДОИСКАТЕЛИ — как играть\n\n"
-        "• Напиши «Рыть» — копаешь на выбранной локации. Находки разной редкости, "
+        "🕳️ ШКУРАХОД — как играть\n\n"
+        "• Напиши «Рыть» — ищешь виртуальные тайники на выбранной игровой локации. Находки разной редкости, "
         "перезарядка между раскопками зависит от лопаты.\n"
         "• «Меню» — локации, снаряжение, находки, магазин, миссии и всё остальное кнопками.\n"
         "• Находки продаются за монеты. На монеты покупаются лопаты (меньше перезарядка, больше удачи), "
@@ -1212,7 +1212,7 @@ async def cmd_profile(conn, p, a):
     return [(
         f"👤 {p['name']}\n🏅 Уровень: {lvl} (XP {p['xp']}, до след.: {xp_left(p['xp'])})\n"
         f"💰 Баланс: {p['money']} · ⭐ Звёзды: {p['stars']}{vip_line(p)}\n"
-        f"⛏ Раскопок всего: {p['digs']}\n"
+        f"🕳️ Поисков всего: {p['digs']}\n"
         + await profile_extra(conn, p) + "\n" + loadout_text(p), None)]
 
 
@@ -1321,6 +1321,8 @@ async def on_text(m: Message):
         if n == 11:
             await m.reply("🛑 Слишком быстро! Подожди пару секунд.")
         return
+    if is_dig:
+        await animate_dig(m, m.from_user.first_name or "Игрок")
     async with LOCK, pool.acquire() as conn:
         async with conn.transaction():
             p = await get_player(conn, m)
@@ -1476,10 +1478,44 @@ def chunk(btns, n=2):
     return [btns[i:i + n] for i in range(0, len(btns), n)]
 
 
+def xp_progress_text(xp: int) -> str:
+    level = level_of(xp)
+    floor_xp = 50 * (level - 1) ** 2
+    ceil_xp = 50 * level ** 2
+    span = max(1, ceil_xp - floor_xp)
+    done = max(0, min(10, int((xp - floor_xp) / span * 10)))
+    bar = "🟩" * done + "⬛" * (10 - done)
+    return f"{bar} {max(0, xp-floor_xp)}/{span} XP · до Lv.{level+1}: {xp_left(xp)}"
+
+
 def home_text(p) -> str:
-    return (f"⛏ КЛАДОИСКАТЕЛИ{' 👑' if is_vip(p) else ''}\n"
+    return (f"🕳️ ШКУРАХОД{' 👑' if is_vip(p) else ''}\n"
             f"👤 {p['name']} · 🏅 Lv.{level_of(p['xp'])} · 💰 {p['money']} · ⭐ {p['stars']}\n"
-            f"📍 {loc_label(p['loc'])}\n\nВыбери раздел (а копать можно командой «Рыть» в чате):")
+            f"{xp_progress_text(p['xp'])}\n"
+            f"📍 {loc_label(p['loc'])} · ⛏ раскопок: {p['digs']}\n\n"
+            "Выбери раздел. Раскопка запускается кнопкой «Рыть» или командой в чате.")
+
+
+async def animate_dig(target, name: str = "Игрок", edit: bool = False):
+    """Короткая декоративная анимация раскопки; не содержит реальных координат или инструкций."""
+    frames = [
+        "🕳️ Экспедиция началась…\n" + name + " осматривает игровую зону.",
+        "🧭 Проверяем вымышленный участок…\n▰▱▱▱▱",
+        "⛏️ Идут виртуальные раскопки…\n▰▰▰▱▱",
+        "✨ Что-то обнаружено!\n▰▰▰▰▰",
+    ]
+    msg = target if edit else None
+    try:
+        if not edit:
+            msg = await target.reply(frames[0])
+        else:
+            await msg.edit_text(frames[0])
+        for frame in frames[1:]:
+            await asyncio.sleep(0.35)
+            await msg.edit_text(frame)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return None
+    return msg
 
 
 def kb_home(uid: int):
@@ -1629,7 +1665,7 @@ async def journal_screen(conn, p, loc_key=None):
     uid = p["user_id"]
     jr = {r["item"]: r for r in await conn.fetch("select * from dig_journal where user_id=$1", uid)}
     if loc_key is None:
-        L = ["📖 ЖУРНАЛ КЛАДОИСКАТЕЛЯ (коллекция находок)", ""]
+        L = ["📖 ЖУРНАЛ ШКУРАХОДА (коллекция находок)", ""]
         btns = []
         total_f = total_d = 0
         for lk, loc in CFG["locations"].items():
@@ -1843,6 +1879,9 @@ async def on_menu_cb(cb: CallbackQuery):
     if flood_count(owner, cb=True) > 45:
         await cb.answer("Не так быстро!")
         return
+    if len(parts) > 2 and parts[2] == "dig":
+        await cb.answer("Начинаем раскопку…")
+        await animate_dig(cb.message, cb.from_user.first_name or "Игрок", edit=True)
     async with LOCK, pool.acquire() as conn:
         async with conn.transaction():
             p = await get_player(conn, cb)
@@ -1850,7 +1889,8 @@ async def on_menu_cb(cb: CallbackQuery):
                 await cb.answer("Доступ закрыт.", show_alert=True)
                 return
             text, markup, invs, extras = await menu_screen(conn, p, parts[2], parts[3:])
-    await cb.answer()
+    if not (len(parts) > 2 and parts[2] == "dig"):
+        await cb.answer()
     await edit_menu(cb, text, markup)
     for t, img in extras:
         await send(cb.message, t, img)
@@ -2071,7 +2111,8 @@ async def on_admin_cb(cb: CallbackQuery):
     async with LOCK, pool.acquire() as conn:
         async with conn.transaction():
             text, markup = await admin_screen(conn, owner, parts[2], parts[3:])
-    await cb.answer()
+    if not (len(parts) > 2 and parts[2] == "dig"):
+        await cb.answer()
     await edit_menu(cb, text, markup)
 
 
