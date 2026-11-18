@@ -1229,13 +1229,16 @@ async def profile_extra(conn, p) -> str:
 
 # ---------- Telegram ----------
 FLOOD: dict[int, list[float]] = {}
+FLOOD_CB: dict[int, list[float]] = {}
 
 
-def flood_count(uid: int) -> int:
+def flood_count(uid: int, cb: bool = False) -> int:
+    """Сколько действий игрок сделал за последние 30 с (команды и кнопки считаются отдельно)."""
+    store = FLOOD_CB if cb else FLOOD
     t = now()
-    q = [x for x in FLOOD.get(uid, []) if t - x < 30]
+    q = [x for x in store.get(uid, []) if t - x < 30]
     q.append(t)
-    FLOOD[uid] = q
+    store[uid] = q
     return len(q)
 
 
@@ -1296,7 +1299,7 @@ SCREENS = {
     "сумка": "stock", "улов": "stock", "склад": "stock", "магазин": "shop",
     "сундуки": "chests", "сундук": "chests", "ключи": "chests", "коллекция": "rel", "реликвии": "rel", "экспедиции": "exp", "экспедиция": "exp", "рейс": "exp",
     "профиль": "profile", "миссии": "missions", "бонус": "bonus", "журнал": "journal",
-    "вип": "vip", "донат": "donat", "звёзды": "donat", "звезды": "donat", "⭐": "donat",
+    "вип": "vip", "vip": "vip", "донат": "donat", "звёзды": "donat", "звезды": "donat", "⭐": "donat",
 }
 DIG_WORDS = {"рыть", "копать", "копай", "раскопки", "dig"}
 
@@ -1837,7 +1840,7 @@ async def on_menu_cb(cb: CallbackQuery):
     if cb.from_user.id != owner:
         await cb.answer("Это меню другого игрока. Напиши «Меню», чтобы открыть своё.", show_alert=True)
         return
-    if flood_count(owner) > 14:
+    if flood_count(owner, cb=True) > 45:
         await cb.answer("Не так быстро!")
         return
     async with LOCK, pool.acquire() as conn:
